@@ -2425,9 +2425,10 @@ textarea{
 @media(max-width:700px){
   html,
   body{
-    height:100% !important;
-    min-height:100% !important;
-    overflow:hidden !important;
+    height:auto !important;
+    min-height:100dvh !important;
+    overflow-x:hidden !important;
+    overflow-y:auto !important;
     touch-action:auto !important;
   }
 
@@ -2438,13 +2439,13 @@ textarea{
 
   .page.active{
     display:block !important;
-    height:calc(100dvh - 56px) !important;
-    max-height:calc(100dvh - 56px) !important;
-    min-height:0 !important;
+    height:auto !important;
+    max-height:none !important;
+    min-height:calc(100dvh - 56px) !important;
     overflow-x:hidden !important;
-    overflow-y:auto !important;
+    overflow-y:visible !important;
     -webkit-overflow-scrolling:touch;
-    overscroll-behavior-y:contain !important;
+    overscroll-behavior-y:auto !important;
     padding-bottom:calc(var(--app-bottom-nav,64px) + env(safe-area-inset-bottom) + 1rem) !important;
   }
 
@@ -3630,11 +3631,27 @@ function showSyncStatus(msg, color) {
 // -- Neon DB helpers --
 // Core: execute a SQL query via Neon's HTTP endpoint
 async function neonSQL(query, params) {
-  const r = await fetch(NEON_SQL_URL, {
+  var controller = null;
+  var timeoutId = null;
+  var fetchOpts = {
     method: 'POST',
     headers: NEON_HDR,
     body: JSON.stringify({ query: query, params: params || [] })
-  });
+  };
+  if (typeof AbortController !== 'undefined') {
+    controller = new AbortController();
+    fetchOpts.signal = controller.signal;
+    timeoutId = setTimeout(function(){ try { controller.abort(); } catch(e){} }, 12000);
+  }
+  let r;
+  try {
+    r = await fetch(NEON_SQL_URL, fetchOpts);
+  } catch(e) {
+    if (e && e.name === 'AbortError') throw new Error('Neon request timed out');
+    throw e;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
   if (!r.ok) {
     var errText = ''; try { errText = await r.text(); } catch(e){}
     if (errText && errText.toLowerCase().includes('transfer')) {
@@ -5348,7 +5365,7 @@ async function init() {
       const savedPage = localStorage.getItem('ots_current_page');
       const savedVenueId = localStorage.getItem('ots_selected_venue');
       if (savedVenueId) selectedVenueId = savedVenueId;
-      if (savedPage && ['home','venues','form'].includes(savedPage)) {
+      if (savedPage && ['home','venues','form','myrequests','leaderboard','profile'].includes(savedPage)) {
         showPage(savedPage);
       } else {
         showPage('home');
@@ -8822,8 +8839,13 @@ function forceImmediateBootPage() {
     // If member session is already known from pre-render flag, show home instantly
     if (document.documentElement.hasAttribute('data-member-active')) {
       if (mlp) mlp.classList.add('hidden');
-      var homePage = document.getElementById('page-home');
-      if (homePage && !hasActive) homePage.classList.add('active');
+      var savedPage = '';
+      try { savedPage = localStorage.getItem('ots_current_page') || ''; } catch(e) {}
+      var safePage = ['home','venues','form','myrequests','leaderboard','profile'].indexOf(savedPage) > -1
+        ? savedPage
+        : 'home';
+      var targetPage = document.getElementById('page-' + safePage);
+      if (targetPage && !hasActive) targetPage.classList.add('active');
       refreshTopNavSoon();
       return;
     }
