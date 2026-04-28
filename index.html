@@ -2474,7 +2474,8 @@ textarea{
     overflow-y:auto !important;
     position:static !important;
     -webkit-overflow-scrolling:touch !important;
-    overscroll-behavior-y:contain !important;
+    overscroll-behavior-y:auto !important;
+    touch-action:auto !important;
   }
 
   body{
@@ -2490,15 +2491,22 @@ textarea{
   }
 
   button,
-  [onclick],
   input,
   select,
   textarea,
-  .mn-item,
+  .mn-item{
+    touch-action:manipulation !important;
+    user-select:none;
+    -webkit-user-select:none;
+  }
+
   .cal-day,
   .date-btn,
-  .venue-row-card{
-    touch-action:manipulation !important;
+  .venue-card,
+  .venue-row-card,
+  .vds-header,
+  .vrc-select-btn{
+    touch-action:pan-y !important;
     user-select:none;
     -webkit-user-select:none;
   }
@@ -2512,6 +2520,8 @@ textarea{
   .page-inner{
     touch-action:pan-y !important;
     -webkit-overflow-scrolling:touch !important;
+    overscroll-behavior-y:auto !important;
+    overflow-anchor:none !important;
   }
 
   .date-strip,
@@ -2571,8 +2581,8 @@ textarea{
     backdrop-filter:none !important;
     -webkit-backdrop-filter:none !important;
     border-top:1px solid rgba(255,255,255,.12) !important;
-    box-shadow:0 -10px 28px rgba(0,0,0,.38) !important;
-    transform:translateZ(0);
+    box-shadow:none !important;
+    contain:layout paint !important;
   }
 
   .mn-item{
@@ -2659,13 +2669,13 @@ textarea{
   }
 
   .nav{
-    position:sticky !important;
+    position:relative !important;
     top:0 !important;
     z-index:100001 !important;
     backdrop-filter:none !important;
     -webkit-backdrop-filter:none !important;
     background:rgba(13,11,26,.98) !important;
-    transform:translateZ(0);
+    contain:layout paint !important;
   }
 
   .nav-inner{
@@ -2845,6 +2855,26 @@ textarea{
   .venue-list-panel{
     padding:1.1rem 0 0 !important;
     scroll-behavior:auto !important;
+  }
+
+  .vds-item,
+  .venue-row-card,
+  .booking-item,
+  .lb-row,
+  .approval-card,
+  .my-perf-row{
+    content-visibility:auto;
+    contain-intrinsic-size:1px 120px;
+    contain:layout paint style;
+  }
+
+  .vrc-img,
+  .vmg-img,
+  .lb-avatar img,
+  .nav-avatar img{
+    content-visibility:auto;
+    contain:layout paint;
+    -webkit-user-drag:none;
   }
 
   #venueListTitle{
@@ -4738,7 +4768,7 @@ function renderVenueList() {
             : `<span style="font-size:.72rem;color:var(--orange);">Slot pending</span>`;
         return `
         <div class="venue-row-card ${cardClass}" ${!blocked ? `onclick="pickVenue('${v.id}')"` : ''}>
-          ${v.imageUrl ? `<img src="${v.imageUrl}" class="vrc-img" alt="${v.name}" onerror="this.style.display='none'">` : ''}
+          ${v.imageUrl ? `<img src="${v.imageUrl}" class="vrc-img" alt="${v.name}" loading="lazy" decoding="async" onerror="this.style.display='none'">` : ''}
           <div class="vrc-name-wrap">
             <div class="vrc-name">${v.name}</div>
             <div class="vrc-meta"> ${v.day || ''}</div>
