@@ -3947,7 +3947,7 @@ textarea{
     <div class="form-group"><label class="form-label">Venue Photo URL <span style="color:var(--muted);font-weight:400;">(optional - paste an image link)</span></label><input type="url" class="form-input" id="vm-image-url" placeholder="https://example.com/venue.jpg"></div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeVenueModal()">Cancel</button>
-      <button class="btn-primary" onclick="saveVenue()">Save Venue</button>
+      <button class="btn-primary" id="vm-save-btn" onclick="saveVenue()">Save Venue</button>
     </div>
   </div>
 </div>
@@ -6178,6 +6178,16 @@ function _daysUntil(dateStr) {
   var today = new Date(); today.setHours(0,0,0,0);
   return Math.floor((bookingDate - today) / 86400000);
 }
+function _canWithdrawOnline(dateStr) {
+  return _daysUntil(dateStr) > 2;
+}
+function _adminContactHtml(label, title) {
+  var safePhone = String(adminPhone || '').replace(/[^\d+]/g, '');
+  if (safePhone) {
+    return `<a class="bi-contact-admin" href="tel:${safePhone}" title="${title || 'Contact admin'}">${label || 'Contact Admin'}</a>`;
+  }
+  return `<span class="bi-contact-admin" title="${title || 'Contact admin'}">${label || 'Contact Admin'}</span>`;
+}
 
 function renderUserBookings() {
   var list = document.getElementById('bookingsList');
@@ -6193,7 +6203,7 @@ function renderUserBookings() {
   };
   list.innerHTML = myBookings.map(function(b) {
     var days = _daysUntil(b.date);
-    var canCancel = days > 2;       // more than 2 days  allow cancel
+    var canCancel = _canWithdrawOnline(b.date); // online withdrawal closes in the last 2 days
     var nearDate  = days >= 0 && days <= 2; // 0-2 days  contact admin
     var isPast    = days < 0;
 
@@ -6203,9 +6213,7 @@ function renderUserBookings() {
       if (canCancel) {
         actionHtml = `<button class="bi-cancel-btn" onclick="cancelMyRequest('${b.id}','pending')" title="Withdraw request">x Withdraw</button>`;
       } else if (nearDate) {
-        actionHtml = adminPhone
-          ? `<a class="bi-contact-admin" href="tel:${adminPhone}" title="Call admin to withdraw"> Contact Admin</a>`
-          : `<span class="bi-contact-admin" title="Contact admin to withdraw"> Contact Admin</span>`;
+        actionHtml = _adminContactHtml('Contact Admin', 'Online withdrawal closes 2 days before the show');
       }
     } else if (b.status === 'confirmed') {
       if (b.proofClaimed) {
@@ -6239,9 +6247,7 @@ function renderUserBookings() {
           if (canCancel) {
             actionHtml += ` <button class="bi-cancel-btn bi-cancel-confirm" onclick="cancelMyRequest('${b.id}','confirmed')" title="Cancel confirmed booking" style="margin-top:.35rem;">Cancel</button>`;
           } else if (nearDate) {
-            actionHtml += adminPhone
-              ? ` <a class="bi-contact-admin" href="tel:${adminPhone}" title="Call admin to cancel"> Admin</a>`
-              : '';
+            actionHtml += ' ' + _adminContactHtml('Contact Admin', 'Online cancellation closes 2 days before the show');
           }
         }
       }
@@ -6282,6 +6288,11 @@ function renderUserBookings() {
   }
 }
 function cancelMyRequest(id, type) {
+  var localBooking = myBookings.find(function(x){ return x.id === id; }) || allBookings.find(function(x){ return x.id === id; });
+  if (localBooking && !_canWithdrawOnline(localBooking.date)) {
+    showToast('', 'Contact Admin', 'Online withdrawal closes 2 days before the show. Please contact admin for changes.');
+    return;
+  }
   var msg = (type === 'confirmed')
     ? 'Cancel your CONFIRMED booking? This cannot be undone.'
     : 'Withdraw this pending request?';
@@ -6798,7 +6809,7 @@ function renderVenueManager() {
                 onclick="toggleVenueStatus('${v.id}')">
           ${v.status==='open'?' Close':' Open'}
         </button>
-        <button class="vmg-btn vmg-del" onclick="deleteVenue('${v.id}')"></button>
+        <button class="vmg-btn vmg-del" onclick="deleteVenue('${v.id}')" title="Delete venue" aria-label="Delete venue">Delete</button>
       </div>
     </div>`).join('');
 }
@@ -6843,27 +6854,50 @@ function openVenueModal(id) {
 }
 function closeVenueModal() { document.getElementById('venueModal').classList.remove('show'); }
 function saveVenue() {
-  const name       = document.getElementById('vm-name').value.trim();
-  const day        = document.getElementById('vm-day').value;
-  const date       = document.getElementById('vm-date').value;
-  const timeStart  = document.getElementById('vm-time-start').value;
-  const timeEnd    = document.getElementById('vm-time-end').value;
-  const confirmStatus = document.getElementById('vm-confirm').value;
-  const visibility    = document.getElementById('vm-visibility').value;
-  const imageUrl      = (document.getElementById('vm-image-url').value||'').trim();
-  if (!name||!date||!timeStart||!timeEnd) { showToast('','Missing Fields','Name, date and slot times are required.'); return; }
-  if (editingVenueId) {
-    const v = venues.find(x=>x.id===editingVenueId);
-    if (v) Object.assign(v,{name,day,date,timeStart,timeEnd,confirmStatus,visibility,imageUrl});
-    logAdminAction('edit_venue', name + ' (' + date + ')').catch(function(){});
-    showToast('','Venue Updated',`"${name}" has been updated.`);
-  } else {
-    venues.push({id:'v-'+Date.now(),name,day,date,timeStart,timeEnd,confirmStatus,visibility,imageUrl,status:'open'});
-    logAdminAction('add_venue', name + ' (' + date + ')').catch(function(){});
-    showToast('','Venue Added',`"${name}" is now live on the booking page.`);
+  var saveBtn = document.getElementById('vm-save-btn');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+  try {
+    var getVal = function(id) {
+      var el = document.getElementById(id);
+      return el ? String(el.value || '').trim() : '';
+    };
+    const name       = getVal('vm-name');
+    let day          = getVal('vm-day');
+    const date       = getVal('vm-date');
+    const timeStart  = getVal('vm-time-start');
+    const timeEnd    = getVal('vm-time-end');
+    const confirmStatus = getVal('vm-confirm') || 'Available';
+    const visibility    = getVal('vm-visibility') || 'Public';
+    const imageUrl      = getVal('vm-image-url');
+
+    if (!name || !date || !timeStart || !timeEnd) {
+      showToast('','Missing Fields','Name, date and slot times are required.');
+      return;
+    }
+    if (!day) {
+      day = new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday:'long' });
+      var dayEl = document.getElementById('vm-day');
+      if (dayEl) dayEl.value = day;
+    }
+
+    if (editingVenueId) {
+      const v = venues.find(x=>x.id===editingVenueId);
+      if (v) Object.assign(v,{name,day,date,timeStart,timeEnd,confirmStatus,visibility,imageUrl});
+      if (typeof logAdminAction === 'function') logAdminAction('edit_venue', name + ' (' + date + ')').catch(function(){});
+      showToast('','Venue Updated',`"${name}" has been updated.`);
+    } else {
+      venues.push({id:'v-'+Date.now(),name,day,date,timeStart,timeEnd,confirmStatus,visibility,imageUrl,status:'open'});
+      if (typeof logAdminAction === 'function') logAdminAction('add_venue', name + ' (' + date + ')').catch(function(){});
+      showToast('','Venue Added',`"${name}" is now live on the booking page.`);
+    }
+    closeVenueModal();
+    renderVenueManager(); renderVenueList(); updateHeroStats(); updateAdminStats(); saveAll();
+  } catch(e) {
+    console.error('[OTS] saveVenue failed:', e);
+    showToast('', 'Save Failed', (e && e.message) ? e.message : 'Could not save venue. Please try again.');
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Venue'; }
   }
-  closeVenueModal();
-  renderVenueManager(); renderVenueList(); updateHeroStats(); updateAdminStats(); saveAll();
 }
 
 // =======================================
