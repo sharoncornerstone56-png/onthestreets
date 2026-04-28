@@ -55,6 +55,29 @@ self.addEventListener("fetch", event => {
   );
 });
 
+FIX FOR TEXT SHOWING ABOVE THE APP
+
+The GitHub page is showing manifest.json and sw.js as text because their contents were pasted into index.html.
+
+In your GitHub repository, the files must be separate:
+
+index.html
+manifest.json
+sw.js
+assets/ots-brand-mark.png
+assets/ots-login-logo.png
+
+Do not paste manifest.json or sw.js inside index.html.
+
+Fast fix:
+1. Open your GitHub repository.
+2. Delete the broken index.html, or edit it and replace the entire file.
+3. Upload the files from this github-pages-upload folder.
+4. Commit the changes.
+5. Wait 1-2 minutes, then open your GitHub Pages link in an incognito/private tab.
+
+If the old broken view still appears, clear the browser cache for the site or add ?v=2 to the URL once.
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
