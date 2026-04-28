@@ -2057,6 +2057,58 @@ html[data-admin-active] #memberLoginPage{
 .ml-input.shake{animation:otpShake .28s ease;}
 @keyframes otpShake{0%,100%{transform:translateX(0);}25%{transform:translateX(-5px);}75%{transform:translateX(5px);}}
 
+
+
+/* ── OTS UI Alignment Clean Fix v4 ── */
+.page-inner,
+.myrequests-wrap,
+.leaderboard-wrap {
+  box-sizing: border-box;
+}
+#page-profile .profile-centered-wrap {
+  max-width: 760px !important;
+  width: min(760px, calc(100% - 2rem)) !important;
+  margin: 0 auto !important;
+  padding: 2rem 1.2rem 6rem !important;
+}
+#page-profile .prof-section,
+#page-profile .prof-avatar-wrap,
+#page-profile .prof-comp-track {
+  max-width: 100% !important;
+}
+#page-profile .prof-section {
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+#page-myrequests .myrequests-wrap {
+  max-width: 760px !important;
+  width: min(760px, calc(100% - 2rem)) !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+#page-leaderboard .leaderboard-wrap {
+  max-width: 760px !important;
+  width: min(760px, calc(100% - 2rem)) !important;
+}
+#page-profile .section-label,
+#page-myrequests .section-label {
+  justify-content: flex-start;
+}
+@media(max-width:700px){
+  #page-profile .profile-centered-wrap,
+  #page-myrequests .myrequests-wrap,
+  #page-leaderboard .leaderboard-wrap {
+    width: calc(100% - 1.4rem) !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+  #page-profile .profile-centered-wrap {
+    padding-top: 1rem !important;
+    padding-bottom: 5rem !important;
+  }
+}
 </style>
 
 <!-- EmailJS SDK for email OTP login -->
@@ -2396,7 +2448,7 @@ html[data-admin-active] #memberLoginPage{
 
 <!-- ══════════════ PROFILE SETTINGS PAGE ══════════════ -->
 <div class="page" id="page-profile">
-  <div class="page-inner" style="max-width:520px;padding:1rem 1.2rem 6rem;">
+  <div class="page-inner profile-centered-wrap" style="max-width:760px;margin:0 auto;padding:2rem 1.2rem 6rem;width:100%;">
     <!-- header -->
     <div style="display:flex;align-items:center;gap:.8rem;margin-bottom:1.6rem;">
       <button onclick="showPage('myrequests')" style="background:none;border:none;color:var(--muted);font-size:1.3rem;cursor:pointer;padding:.1rem .3rem;line-height:1;">←</button>
@@ -3076,6 +3128,37 @@ function loadDismissed() {
   } catch(e) { _dismissedIds = new Set(); }
 }
 
+// Cross-device dismiss sync: stores cleared request IDs in Neon per member.
+// This keeps cleared My Requests from coming back on another phone/laptop.
+let _remoteDismissLoadedFor = '';
+function getMemberKey(){
+  var e = (memberEmail || '').trim().toLowerCase();
+  if (e) return 'email:' + e;
+  var p = _normPhone(memberPhone || '');
+  return p ? 'phone:' + p : '';
+}
+async function loadDismissedRemote(force){
+  var key = getMemberKey();
+  if (!key) return;
+  if (!force && _remoteDismissLoadedFor === key) return;
+  try {
+    var rows = await neonSQL('SELECT booking_id FROM dismissed_requests WHERE user_key = $1', [key]);
+    (rows || []).forEach(function(r){ if (r.booking_id != null) _dismissedIds.add(String(r.booking_id)); });
+    _remoteDismissLoadedFor = key;
+    saveDismissed();
+  } catch(e) { console.warn('[OTS] remote dismissed request load skipped:', e && (e.message||e)); }
+}
+async function saveDismissedRemote(ids){
+  var key = getMemberKey();
+  if (!key || !ids || !ids.length) return;
+  ids = ids.map(String);
+  try {
+    var params = [key];
+    var values = ids.map(function(id, i){ params.push(id); return '($1,$' + (i+2) + ')'; }).join(',');
+    await neonSQL('INSERT INTO dismissed_requests (user_key, booking_id) VALUES ' + values + ' ON CONFLICT (user_key, booking_id) DO NOTHING', params);
+  } catch(e) { console.warn('[OTS] remote dismissed request save skipped:', e && (e.message||e)); }
+}
+
 // ── Save / restore myBookings locally so they survive page refresh ──
 function saveMyBookings() {
   try { localStorage.setItem(MY_BOOKINGS_KEY, JSON.stringify(myBookings)); } catch(e){}
@@ -3104,7 +3187,7 @@ function restoreMyBookingsFromServer() {
   var changed = false;
   allBookings.forEach(function(ab) {
     if (ab.status === 'cancelled') return;
-    if (_dismissedIds.has(ab.id)) return; // user explicitly cleared this — never bring it back
+    if (_dismissedIds.has(String(ab.id))) return; // user explicitly cleared this — never bring it back
     var abPhone = _normPhone(ab.phone);
     var abEmail = (ab.email || '').trim().toLowerCase();
     var matches = (myPhone && abPhone && abPhone === myPhone) ||
@@ -3132,6 +3215,8 @@ function restoreMyBookingsFromServer() {
 // Live fetch of this member's own bookings from server — called when opening My Requests
 async function fetchMyBookingsLive() {
   if (!memberLoggedIn) return;
+  await loadDismissedRemote();
+  await loadDismissedNotifsRemote();
   var myPhone = _normPhone(memberPhone);
   var myEmail = (memberEmail || '').trim().toLowerCase();
   if (!myPhone && !myEmail) return;
@@ -3156,7 +3241,7 @@ async function fetchMyBookingsLive() {
         checkinAt: b.checkin_at||null
       };
       // If the member explicitly cleared this booking, never show it again
-      if (_dismissedIds.has(sb.id)) return;
+      if (_dismissedIds.has(String(sb.id))) return;
       if (sb.status === 'cancelled') {
         var ex = myBookings.find(function(m){ return m.id === sb.id; });
         if (ex && ex.status !== 'cancelled') { ex.status = 'cancelled'; changed = true; }
@@ -3314,109 +3399,119 @@ function saveRemote() {
 
 function saveAll() { saveLocal(); saveRemote(); }
 
-// ── Load from Neon → localStorage fallback → defaults ──
-async function loadData() {
-  showSyncStatus('⚡ Opening…','var(--blue)');
 
-  // Restore cached app data FIRST so the app opens fast
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) {
-      const d = JSON.parse(raw);
-      venues        = d.venues        || DEFAULT_VENUES;
-      allBookings   = d.allBookings   || [];
-      galleryPhotos = d.galleryPhotos || [];
-      renderAfterLoad();
-      showSyncStatus('⚡ Cached data loaded','var(--blue)');
+// ── LIVE-ONLY FAST LOAD HELPERS (no venue cache) ──
+function normalizeVenueDate(value) {
+  if (!value) return '';
+  var s = String(value).trim();
+  // Neon can return DATE as YYYY-MM-DD or full ISO timestamp. Calendar needs only YYYY-MM-DD.
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  // Handles accidental DD/MM/YYYY or DD-MM-YYYY imports.
+  var m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (m) return m[3] + '-' + String(m[2]).padStart(2,'0') + '-' + String(m[1]).padStart(2,'0');
+  return s.slice(0, 10);
+}
+function normalizeStatus(value, fallback) {
+  return String(value || fallback || '').trim().toLowerCase();
+}
+function normalizeTitleCase(value, fallback) {
+  var s = String(value || fallback || '').trim();
+  if (!s) return fallback || '';
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+function isVenueOpen(v) {
+  var st = normalizeStatus(v && v.status, 'open');
+  return !st || st === 'open' || st === 'active' || st === 'available';
+}
+function mapVenueRows(vRows) {
+  return (vRows || []).map(function(v){ return {
+    id:v.id, name:v.name, day:v.day||'', date:normalizeVenueDate(v.date),
+    timeStart:v.time_start||'', timeEnd:v.time_end||'',
+    confirmStatus:normalizeTitleCase(v.confirm_status, 'Available'),
+    visibility:normalizeTitleCase(v.visibility, 'Public'), status:normalizeStatus(v.status, 'open'),
+    imageUrl:v.image_url||''
+  }; });
+}
+function mapBookingRows(bRows) {
+  return (bRows || []).map(function(b){ return {
+    id:b.id, venueId:b.venue_id||'', venue:b.venue||'',
+    date:b.date||'', type:b.type||'', name:b.name||'',
+    phone:b.phone||'', email:b.email||'', price:b.price||0, notes:b.notes||'',
+    status:b.status||'pending', createdAt:b.created_at||'',
+    proofUrl:b.proof_url||'', proofClaimed:!!b.proof_claimed,
+    checkinAt:b.checkin_at||null
+  }; });
+}
+function showVenueLiveLoading(msg) {
+  var list = document.getElementById('venueList');
+  var title = document.getElementById('venueListTitle');
+  if (title) title.textContent = 'Loading Live Venues…';
+  if (list) list.innerHTML = '<div class="no-venues-day"><span class="nv-icon">⏳</span>' + (msg || 'Fetching latest venues from Neon…') + '</div>';
+}
+async function refreshLiveCoreData(opts) {
+  opts = opts || {};
+  if (opts.showLoading) showVenueLiveLoading('Fetching latest venues from Neon…');
+  showSyncStatus('⚡ Loading live data…','var(--blue)');
+  const [vRows, bRows, sRows] = await Promise.all([
+    neonSQL('SELECT id,name,day,date,time_start,time_end,confirm_status,visibility,status,image_url FROM venues ORDER BY date ASC, time_start ASC'),
+    neonSQL('SELECT id,venue_id,venue,date,type,name,phone,email,price,notes,status,created_at,proof_url,proof_claimed,checkin_at FROM bookings ORDER BY created_at DESC LIMIT 300'),
+    neonSQL('SELECT key,value FROM settings')
+  ]);
+  venues = mapVenueRows(vRows);
+  console.log('[OTS] Live venues loaded:', venues.length, venues.slice(0, 5));
+  allBookings = mapBookingRows(bRows);
+  if (memberLoggedIn) { await loadDismissedRemote(); await loadDismissedNotifsRemote(); }
+  (sRows || []).forEach(function(row){ if(row.key==='admin_phone') adminPhone=row.value||''; });
+  let statusChanged = false;
+  myBookings = loadMyBookings().map(function(mb) {
+    const live = allBookings.find(function(ab){ return ab.id === mb.id; });
+    if (live && live.status !== mb.status) {
+      setTimeout(function(){ showApprovalNotif(live.status === 'confirmed' ? 'approved' : 'rejected', mb.venue, mb.id); }, 900);
+      statusChanged = true;
+      return Object.assign({}, mb, { status: live.status });
     }
-  } catch(e) {}
-
-  // Restore myBookings from localStorage FIRST (so UI shows immediately)
-  myBookings = loadMyBookings();
-  renderUserBookings();
-
-  try {
-    const [vRows, bRows, gRows, sRows] = await Promise.all([
-      sbGet('venues'), sbGet('bookings'), sbGet('gallery'), sbGet('settings')
-    ]);
-    // Load settings (admin phone, etc.)
-    sRows.forEach(function(row){ if(row.key==='admin_phone') adminPhone=row.value||''; });
-    // Map DB snake_case → JS camelCase
-    venues = vRows.map(v=>({
-      id:v.id, name:v.name, day:v.day||'', date:v.date||'',
-      timeStart:v.time_start||'', timeEnd:v.time_end||'',
-      confirmStatus:v.confirm_status||'Available',
-      visibility:v.visibility||'Public', status:v.status||'open',
-      imageUrl:v.image_url||''
-    }));
-    allBookings = bRows.map(b=>({
-      id:b.id, venueId:b.venue_id||'', venue:b.venue||'',
-      date:b.date||'', type:b.type||'', name:b.name||'',
-      phone:b.phone||'', notes:b.notes||'',
-      status:b.status||'pending', createdAt:b.created_at||'',
-      proofUrl:b.proof_url||'', proofClaimed:!!b.proof_claimed,
-      checkinAt:b.checkin_at||null
-    }));
-    galleryPhotos = gRows.filter(g => !g.id || !g.id.startsWith("perf_")).map(g=>({id:g.id,url:g.url,caption:g.caption||""}));
-
-    // ── Cross-check myBookings statuses against live Neon data ──
-    // This catches approvals/rejections that happened while user was away
-    let statusChanged = false;
-    myBookings = myBookings.map(mb => {
-      const live = allBookings.find(ab => ab.id === mb.id);
-      if (live && live.status !== mb.status) {
-        // Status changed while they were gone — queue a notification
-        setTimeout(() => {
-          showApprovalNotif(
-            live.status === 'confirmed' ? 'approved' : 'rejected',
-            mb.venue, mb.id
-          );
-        }, 1200); // slight delay so page finishes loading first
-        statusChanged = true;
-        return { ...mb, status: live.status };
-      }
-      return mb;
-    });
-    if (statusChanged) { saveMyBookings(); updateNotifBadge(); }
-
-    // ── Cross-device: restore any server bookings matching the logged-in phone ──
-    restoreMyBookingsFromServer();
-
-    // Seed defaults on very first load if DB is empty
-    if (!venues.length) {
-      venues = DEFAULT_VENUES;
-      const seedRows = DEFAULT_VENUES.map(v=>({
-        id:v.id,name:v.name,day:v.day,date:v.date,
-        time_start:v.timeStart,time_end:v.timeEnd,
-        confirm_status:v.confirmStatus,visibility:v.visibility,status:v.status
-      }));
-      await sbUpsert('venues', seedRows);
-    }
-    saveLocal();
-    showSyncStatus('✅ Updated','var(--green)');
-  } catch(e) {
-    const errMsg = e && (e.message || e.toString()) || 'unknown error';
-    console.warn('[OTS] Neon load failed:', errMsg, '— falling back to localStorage');
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (raw) {
-        const d = JSON.parse(raw);
-        venues        = d.venues        || DEFAULT_VENUES;
-        allBookings   = d.allBookings   || [];
-        galleryPhotos = d.galleryPhotos || [];
-        showSyncStatus('📱 Offline cache loaded','var(--blue)');
-      } else {
-        venues = DEFAULT_VENUES; allBookings = []; galleryPhotos = [];
-        showSyncStatus('🆕 Default data','var(--muted)');
-      }
-    } catch(e2) {
-      venues = DEFAULT_VENUES; allBookings = []; galleryPhotos = [];
-    }
-  }
+    return mb;
+  });
+  if (statusChanged) { saveMyBookings(); updateNotifBadge(); }
   renderAfterLoad();
-  startGigPoll(); // keep gig calendar live without page refresh
+  showSyncStatus('✅ Live data updated','var(--green)');
+  return { venues: venues, bookings: allBookings };
+}
+async function loadGalleryLiveInBackground() {
+  try {
+    const gRows = await neonSQL('SELECT id,url,caption FROM gallery');
+    galleryPhotos = (gRows || []).filter(function(g){ return !g.id || !String(g.id).startsWith('perf_'); }).map(function(g){ return { id:g.id, url:g.url, caption:g.caption||'' }; });
+    renderGigCalendar();
+  } catch(e) {
+    console.warn('[OTS] Gallery live load skipped:', e && (e.message || e));
+  }
 }
 
+// ── Load from Neon live only (no venue cache) ──
+async function loadData() {
+  // LIVE ONLY: do not restore venue data from localStorage.
+  // This prevents deleted/old venues from appearing after refresh or login.
+  showVenueLiveLoading('Fetching latest venues from Neon…');
+  showSyncStatus('⚡ Loading live data…','var(--blue)');
+  myBookings = loadMyBookings();
+  renderUserBookings();
+  try {
+    await refreshLiveCoreData({ showLoading:false });
+    restoreMyBookingsFromServer();
+    loadGalleryLiveInBackground(); // photos can be heavy, so do not block venues
+  } catch(e) {
+    const errMsg = e && (e.message || e.toString()) || 'unknown error';
+    console.warn('[OTS] Neon live load failed:', errMsg);
+    venues = []; allBookings = []; galleryPhotos = [];
+    renderAfterLoad();
+    showSyncStatus('⚠ Live DB load failed','var(--red)');
+    var list = document.getElementById('venueList');
+    var title = document.getElementById('venueListTitle');
+    if (title) title.textContent = 'Unable to Load Venues';
+    if (list) list.innerHTML = '<div class="no-venues-day"><span class="nv-icon">⚠️</span>Could not load live venues from Neon. Please check internet/database and refresh.</div>';
+  }
+  startGigPoll();
+}
 // ── Delete helpers called by UI ──
 async function dbDeleteVenue(id) {
   try { await sbDelete('venues', id); } catch(e) { console.error(e); }
@@ -3533,28 +3628,14 @@ function showPage(page) {
     stopMyRequestsPoll();
   }
   if (page === 'venues') {
-    // Pull latest venues & bookings from Neon for users
-    Promise.all([sbGet('venues'), sbGet('bookings')])
-      .then(([vRows, bRows]) => {
-        venues = vRows.map(v=>({
-          id:v.id,name:v.name,day:v.day||'',date:v.date||'',
-          timeStart:v.time_start||'',timeEnd:v.time_end||'',
-          confirmStatus:v.confirm_status||'Available',
-          visibility:v.visibility||'Public',status:v.status||'open',
-          imageUrl:v.image_url||''
-        }));
-        allBookings = bRows.map(b=>({
-          id:b.id,venueId:b.venue_id||'',venue:b.venue||'',
-          date:b.date||'',type:b.type||'',name:b.name||'',
-          phone:b.phone||'',notes:b.notes||'',
-          status:b.status||'pending',createdAt:b.created_at||'',
-          proofUrl:b.proof_url||'',proofClaimed:!!b.proof_claimed,
-          checkinAt:b.checkin_at||null
-        }));
-        saveLocal();
-      })
-      .catch(()=>{})
-      .finally(()=>{ renderCalendar(); renderVenueList(); });
+    // LIVE ONLY refresh: no cached venues, no old/deleted venue display.
+    refreshLiveCoreData({ showLoading:true }).catch(function(e){
+      console.warn('[OTS] Venue live refresh failed:', e && (e.message || e));
+      var list = document.getElementById('venueList');
+      var title = document.getElementById('venueListTitle');
+      if (title) title.textContent = 'Unable to Load Venues';
+      if (list) list.innerHTML = '<div class="no-venues-day"><span class="nv-icon">⚠️</span>Could not load latest venues from Neon. Please refresh.</div>';
+    });
   }
   if (page === 'home')   { document.getElementById('ntab-home').classList.add('active'); }
   if (page === 'leaderboard') { loadLeaderboard(); }
@@ -3587,7 +3668,7 @@ let selectedCalDate = null;
 
 function getVenueDates() {
   const todayStr = new Date().toISOString().slice(0,10);
-  return new Set(venues.filter(v=>v.status==='open' && v.date >= todayStr).map(v=>v.date));
+  return new Set(venues.filter(v=>isVenueOpen(v) && normalizeVenueDate(v.date) >= todayStr).map(v=>normalizeVenueDate(v.date)));
 }
 function calPrev() {
   calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; }
@@ -3674,9 +3755,11 @@ function renderVenueList() {
 
     // Always group all open venues by date — tapping a calendar date just scrolls to that group
     const dateMap = {};
-    venues.filter(v => v.status === 'open' && v.date && v.date >= todayStr).forEach(v => {
-      if (!dateMap[v.date]) dateMap[v.date] = [];
-      dateMap[v.date].push(v);
+    venues.filter(v => isVenueOpen(v) && normalizeVenueDate(v.date) && normalizeVenueDate(v.date) >= todayStr).forEach(v => {
+      var vd = normalizeVenueDate(v.date);
+      v.date = vd;
+      if (!dateMap[vd]) dateMap[vd] = [];
+      dateMap[vd].push(v);
     });
 
     const sortedDates = Object.keys(dateMap).sort();
@@ -4585,11 +4668,37 @@ async function submitProof() {
 const NOTIF_SEEN_KEY = 'ots_notif_seen_v1';
 var _notifSeenMap  = {}; // { [bookingId]: 'confirmed'|'rejected' }
 var _notifHistory  = []; // [{ id, venue, status, date }] newest first
+var _notifDismissedIds = new Set(); // cross-device cleared notification ids
+let _remoteNotifDismissLoadedFor = '';
+
+async function loadDismissedNotifsRemote(force){
+  var key = getMemberKey();
+  if (!key) return;
+  if (!force && _remoteNotifDismissLoadedFor === key) return;
+  try {
+    var rows = await neonSQL('SELECT booking_id FROM dismissed_notifications WHERE user_key = $1', [key]);
+    (rows || []).forEach(function(r){ if (r.booking_id != null) _notifDismissedIds.add(String(r.booking_id)); });
+    _remoteNotifDismissLoadedFor = key;
+    // Remove any locally saved history for ids that were cleared on another device
+    _notifHistory = _notifHistory.filter(function(h){ return !_notifDismissedIds.has(String(h.id)); });
+    _saveNotifData();
+  } catch(e) { console.warn('[OTS] remote notification dismiss load skipped:', e && (e.message||e)); }
+}
+async function saveDismissedNotifsRemote(ids){
+  var key = getMemberKey();
+  if (!key || !ids || !ids.length) return;
+  ids = ids.map(String);
+  try {
+    var params = [key];
+    var values = ids.map(function(id, i){ params.push(id); return '($1,$' + (i+2) + ')'; }).join(',');
+    await neonSQL('INSERT INTO dismissed_notifications (user_key, booking_id) VALUES ' + values + ' ON CONFLICT (user_key, booking_id) DO NOTHING', params);
+  } catch(e) { console.warn('[OTS] remote notification dismiss save skipped:', e && (e.message||e)); }
+}
 
 function _loadNotifData() {
   try {
     var raw = localStorage.getItem(NOTIF_SEEN_KEY);
-    if (raw) { var d = JSON.parse(raw); _notifSeenMap = d.seen||{}; _notifHistory = d.history||[]; }
+    if (raw) { var d = JSON.parse(raw); _notifSeenMap = d.seen||{}; _notifHistory = (d.history||[]).filter(function(h){ return !_notifDismissedIds.has(String(h.id)); }); }
   } catch(e) {}
 }
 function _saveNotifData() {
@@ -4598,6 +4707,7 @@ function _saveNotifData() {
 
 // Add a new notification to history (deduped by id+status)
 function _recordNotif(booking) {
+  if (booking && booking.id != null && _notifDismissedIds.has(String(booking.id))) return;
   var already = _notifHistory.find(function(h){ return h.id === booking.id && h.status === booking.status; });
   if (!already) {
     _notifHistory.unshift({ id: booking.id, venue: booking.venue || booking.venueId || '—', status: booking.status, date: booking.date || '' });
@@ -4608,7 +4718,7 @@ function _recordNotif(booking) {
 
 function getUnseenNotifs() {
   return myBookings.filter(function(b) {
-    return (b.status === 'confirmed' || b.status === 'rejected') && _notifSeenMap[b.id] !== b.status;
+    return (b.status === 'confirmed' || b.status === 'rejected') && !_notifDismissedIds.has(String(b.id)) && _notifSeenMap[b.id] !== b.status;
   });
 }
 
@@ -4633,7 +4743,8 @@ function toggleNotifPanel() {
   if (panel && panel.classList.contains('open')) { closeNotifPanel(); } else { openNotifPanel(); }
 }
 
-function openNotifPanel() {
+async function openNotifPanel() {
+  await loadDismissedNotifsRemote();
   _loadNotifData();
   // Sync history from current myBookings so nothing is missed
   myBookings.forEach(function(b) {
@@ -4645,7 +4756,7 @@ function openNotifPanel() {
     if (!_notifHistory.length) {
       list.innerHTML = '<div class="np-empty">No notifications yet.<br><span style="font-size:.8rem">When your bookings are confirmed or rejected, they\'ll appear here.</span></div>';
     } else {
-      list.innerHTML = _notifHistory.map(function(h) {
+      list.innerHTML = _notifHistory.filter(function(h){ return !_notifDismissedIds.has(String(h.id)); }).map(function(h) {
         var isConf   = h.status === 'confirmed';
         var unseen   = _notifSeenMap[h.id] !== h.status;
         var icon     = isConf ? '🎉' : '❌';
@@ -4679,18 +4790,29 @@ function closeNotifPanel() {
 }
 
 function clearAllNotifs() {
+  var ids = [];
+  _notifHistory.forEach(function(h){ if (h.id != null) ids.push(String(h.id)); });
+  myBookings.forEach(function(b){
+    if (b.status === 'confirmed' || b.status === 'rejected') {
+      _notifSeenMap[b.id] = b.status;
+      ids.push(String(b.id));
+    }
+  });
+  ids.forEach(function(id){ _notifDismissedIds.add(id); });
   _notifHistory = [];
-  myBookings.forEach(function(b){ _notifSeenMap[b.id] = b.status; });
   _saveNotifData();
+  saveDismissedNotifsRemote(Array.from(new Set(ids)));
   var list = document.getElementById('notifPanelList');
   if (list) list.innerHTML = '<div class="np-empty">All cleared.<br><span style="font-size:.8rem">Future status changes will appear here.</span></div>';
   updateNotifBadge();
 }
 
 function dismissNotif(id) {
-  _notifHistory = _notifHistory.filter(function(h){ return h.id !== id; });
+  _notifDismissedIds.add(String(id));
+  _notifHistory = _notifHistory.filter(function(h){ return String(h.id) !== String(id); });
   _notifSeenMap[id] = 'dismissed';
   _saveNotifData();
+  saveDismissedNotifsRemote([String(id)]);
   var el = document.getElementById('npi-' + id);
   if (el) { el.style.transition = 'opacity .2s, max-height .25s'; el.style.opacity = '0'; el.style.maxHeight = '0'; el.style.overflow = 'hidden'; el.style.padding = '0'; setTimeout(function(){ el.remove(); }, 260); }
   if (!_notifHistory.length) {
@@ -4734,6 +4856,8 @@ async function runMigrations() {
   await run("ALTER TABLE claims ADD COLUMN IF NOT EXISTS reason TEXT DEFAULT ''");
   await run("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS checkin_at TIMESTAMPTZ");
   await run("ALTER TABLE claims ADD COLUMN IF NOT EXISTS points NUMERIC DEFAULT 1");
+  await run("CREATE TABLE IF NOT EXISTS dismissed_requests (user_key TEXT NOT NULL, booking_id TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY (user_key, booking_id))");
+  await run("CREATE TABLE IF NOT EXISTS dismissed_notifications (user_key TEXT NOT NULL, booking_id TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY (user_key, booking_id))");
 }
 
 async function init() {
@@ -4747,7 +4871,9 @@ async function init() {
   restoreAdminSession();
   // Restore member session, then fill in any missing phone/email from the members table
   restoreMemberSession();
+  if (memberLoggedIn) { loadDismissedRemote(true).then(function(){ renderUserBookings(); }); loadDismissedNotifsRemote(true).then(updateNotifBadge); }
   enrichMemberSession().then(() => {
+    if (memberLoggedIn) { loadDismissedRemote(true).then(function(){ renderUserBookings(); }); loadDismissedNotifsRemote(true).then(updateNotifBadge); }
     // Re-fetch bookings after enrichment in case phone/email was just filled in
     if (memberLoggedIn) restoreMyBookingsFromServer();
   }).catch(()=>{});
@@ -5085,8 +5211,9 @@ function cancelMyRequest(id, type) {
 
 // Remove a single rejected/cancelled entry from the local list (display-only, no DB write needed)
 function dismissRequest(id) {
-  _dismissedIds.add(id);
+  _dismissedIds.add(String(id));
   saveDismissed();
+  saveDismissedRemote([String(id)]);
   myBookings = myBookings.filter(function(x){ return x.id !== id; });
   saveMyBookings();
   renderUserBookings();
@@ -5097,12 +5224,21 @@ function dismissRequest(id) {
 // Pending slots and confirmed slots still needing proof upload are always kept
 function clearAllDismissable() {
   if (!confirm('Clear all done, rejected and cancelled requests from your list?')) return;
+  var idsToDismiss = [];
   myBookings.forEach(function(b) {
     var isDismissable = b.status === 'rejected' || b.status === 'cancelled' ||
                         (b.status === 'confirmed' && (b.proofClaimed || _daysUntil(b.date) < 0));
-    if (isDismissable) _dismissedIds.add(b.id);
+    if (isDismissable) { _dismissedIds.add(String(b.id)); idsToDismiss.push(String(b.id)); }
   });
   saveDismissed();
+  saveDismissedRemote(idsToDismiss);
+  try {
+    // Also dismiss persistent bell/history notifications for the same booking ids.
+    if (typeof _dismissedNotifs !== 'undefined') {
+      _dismissedIds.forEach(function(id){ _dismissedNotifs.add(id); });
+      if (typeof _saveDismissedNotifs === 'function') _saveDismissedNotifs();
+    }
+  } catch(e){}
   myBookings = myBookings.filter(function(b) {
     return b.status === 'pending' ||
            (b.status === 'confirmed' && !b.proofClaimed && _daysUntil(b.date) >= 0);
@@ -5927,6 +6063,7 @@ function initStatusSnapshot() {
 }
 
 function showApprovalNotif(type, venueName, bookingId) {
+  if (bookingId && _dismissedIds && _dismissedIds.has(String(bookingId))) return;
   // Record in persistent notification history
   _recordNotif({ id: bookingId, venue: venueName, status: type === 'approved' ? 'confirmed' : 'rejected', date: '' });
   updateNotifBadge();
@@ -7564,6 +7701,8 @@ function mlVerify() {
   _fetchAndApplyMemberAvatar();
   updateNotifBadge();
   restoreMyBookingsFromServer();
+  // After login, immediately refresh live Neon data so venues do not stay blank.
+  refreshLiveCoreData({ showLoading:true }).catch(function(e){ console.warn('[OTS] post-login live refresh failed:', e); });
   clearInterval(_mlOtpTimer);
   closeMemberLogin();
   fillBookingFormFromSession();
