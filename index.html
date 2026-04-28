@@ -4117,13 +4117,14 @@ function startAdminPolling() {
   _adminPollTimer = setInterval(function() {
     if (!adminLoggedIn) return;
     // Lightweight poll — only fetch bookings (not venues/gallery)
-    neonSQL('SELECT id, venue, venue_id, date, name, type, status, proof_url, proof_claimed, checkin_at FROM bookings ORDER BY created_at DESC LIMIT 100')
+    neonSQL('SELECT id, venue, venue_id, date, name, type, status, proof_url, proof_claimed, checkin_at, created_at FROM bookings ORDER BY created_at DESC LIMIT 100')
       .then(function(rows){ return rows || []; })
       .then(function(rows) {
         var fresh = (rows||[]).map(function(b){ return {
           id: b.id, venueId: b.venue_id||'', venue: b.venue||'',
           date: b.date||'', name: b.name||'', type: b.type||'', status: b.status||'pending',
-          proofUrl: b.proof_url||'', proofClaimed: !!b.proof_claimed, checkinAt: b.checkin_at||null
+          proofUrl: b.proof_url||'', proofClaimed: !!b.proof_claimed, checkinAt: b.checkin_at||null,
+          createdAt: b.created_at||''
         }; });
         // Detect changes before deciding whether to re-render
         var changed = false;
@@ -4139,11 +4140,29 @@ function startAdminPolling() {
             changed = true;
           }
         });
-        // Removed bookings (cancelled from member side)
+        // Removed bookings (cancelled from member side).
+        // `fresh` is the most-recent 100 bookings; only consider an existing
+        // booking removed if its created_at is recent enough that it would
+        // still be in that window — otherwise we'd wrongly drop older rows.
         var freshIds = fresh.map(function(f){ return f.id; });
-        allBookings.forEach(function(b) {
-          if (!freshIds.includes(b.id)) return; // gap ok — fresh only has recent 100
-        });
+        var oldestFreshTs = fresh.length
+          ? Math.min.apply(null, fresh.map(function(f){
+              var t = Date.parse(f.createdAt || '') || 0;
+              return t || Date.now();
+            }))
+          : 0;
+        if (oldestFreshTs) {
+          var beforeLen = allBookings.length;
+          allBookings = allBookings.filter(function(b) {
+            if (freshIds.includes(b.id)) return true;
+            var t = Date.parse(b.createdAt || '') || 0;
+            // Older than what `fresh` covers → keep (could be outside the 100-row window)
+            if (!t || t < oldestFreshTs) return true;
+            // Recent enough that it should be in `fresh` but isn't → it was deleted
+            return false;
+          });
+          if (allBookings.length !== beforeLen) changed = true;
+        }
         checkNewBookingsAndNotify(fresh);
         if (changed && currentAdminTab) {
           // Only re-render the current tab UI — no need to re-fetch from Neon
@@ -4942,7 +4961,12 @@ function renderVenues() {}
 // DATES
 // ═══════════════════════════════════════
 function renderDates() {
-  const strip = null // dateStrip removed;
+  // Always make sure selectedDate is initialised so booking flow works
+  if (!selectedDate) selectedDate = new Date().toISOString().split('T')[0];
+  // The date strip element was removed from the DOM in a refactor.
+  // Look it up safely; if it isn't on the page, just bail out instead of crashing.
+  const strip = document.getElementById('dateStrip');
+  if (!strip) return;
   const today = new Date();
   const days  = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   let html='';
@@ -4956,7 +4980,6 @@ function renderDates() {
     </button>`;
   }
   strip.innerHTML=html;
-  if (!selectedDate) { selectedDate=today.toISOString().split('T')[0]; renderDates(); }
 }
 function selectDate(key) { selectedDate=key; renderDates(); updateSummary(); validateForm(); }
 
@@ -7065,6 +7088,18 @@ function restoreMemberSession() {
       memberName  = s.name || '';
       memberAddress = s.address || '';
       memberZoneCurrent = s.zone_current || '';
+      // Restore the rest of the profile so completion bar / avatar / bio etc.
+      // don't show as blank on every page refresh.
+      memberAvatarUrl = s.avatar_url || '';
+      memberBio = s.bio || '';
+      memberInstrument = s.instrument || '';
+      memberInstagram = s.instagram || '';
+      memberBloodGroup = s.blood_group || '';
+      memberDob = s.dob || '';
+      memberIdProofUrl = s.id_proof_url || '';
+      memberZoneRequest = s.zone_request || '';
+      memberZoneRequestReason = s.zone_request_reason || '';
+      memberZoneRequestStatus = s.zone_request_status || '';
       // Auto-renew: reset expiry to 1 year from now on every visit
       s.exp = Date.now() + 365*24*60*60*1000;
       localStorage.setItem(ML_KEY, JSON.stringify(s));
@@ -7104,12 +7139,24 @@ async function enrichMemberSession() {
 }
 
 function saveMemberSession() {
+  // Persist EVERY profile field so the profile page, completion bar, avatar,
+  // bio, etc. don't reset to blank/0% on every page refresh.
   localStorage.setItem(ML_KEY, JSON.stringify({
     phone: memberPhone,
     email: memberEmail,
     name: memberName,
     address: memberAddress,
     zone_current: memberZoneCurrent,
+    avatar_url: memberAvatarUrl,
+    bio: memberBio,
+    instrument: memberInstrument,
+    instagram: memberInstagram,
+    blood_group: memberBloodGroup,
+    dob: memberDob,
+    id_proof_url: memberIdProofUrl,
+    zone_request: memberZoneRequest,
+    zone_request_reason: memberZoneRequestReason,
+    zone_request_status: memberZoneRequestStatus,
     exp: Date.now() + 365*24*60*60*1000
   }));
 }
@@ -7722,7 +7769,20 @@ function mlVerify() {
   memberEmail = _mlOtpEmail || allowed.email || '';
   memberPhone = allowed.phone || '';
   memberName  = allowed.name || '';
+  // Hydrate the full profile from the matched DB row so the profile page,
+  // completion bar, avatar, bio, etc. are populated immediately on login.
   try { memberAddress = allowed.address || memberAddress || ''; } catch(e) {}
+  memberAvatarUrl       = allowed.avatar_url           || '';
+  memberBio             = allowed.bio                  || '';
+  memberInstrument      = allowed.instrument           || '';
+  memberInstagram       = allowed.instagram            || '';
+  memberBloodGroup      = allowed.blood_group          || '';
+  memberDob             = allowed.date_of_birth        || '';
+  memberIdProofUrl      = allowed.id_proof_url         || '';
+  memberZoneCurrent     = allowed.zone_current         || '';
+  memberZoneRequest     = allowed.zone_request         || '';
+  memberZoneRequestReason = allowed.zone_request_reason || '';
+  memberZoneRequestStatus = allowed.zone_request_status || '';
   saveMemberSession();
   updateMemberNavUI();
   _fetchAndApplyMemberAvatar();
@@ -7760,8 +7820,9 @@ function mlBack() {
 async function mlCheckMemberByEmail(email) {
   try {
     var lc = email.toLowerCase();
+    // Pull every profile column so the OTP login can hydrate bio, avatar, zone, etc.
     var rows = await neonSQL(
-      'SELECT id, name, email, phone FROM members WHERE LOWER(email) = $1 AND active IS NOT FALSE LIMIT 1',
+      'SELECT * FROM members WHERE LOWER(email) = $1 AND active IS NOT FALSE LIMIT 1',
       [lc]
     );
     if (rows.length) return rows[0];
