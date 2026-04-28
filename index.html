@@ -2046,6 +2046,17 @@ html[data-admin-active] #memberLoginPage{
 #mlTimerText{font-size:.78rem;color:rgba(244,240,255,.55);text-align:center;margin:.7rem 0 .2rem;min-height:1.1rem;}
 #mlResendBtn{background:none;border:none;color:#70BAF4;font-size:.82rem;cursor:pointer;text-decoration:underline;}
 #mlResendBtn:disabled{color:rgba(244,240,255,.35);cursor:not-allowed;text-decoration:none;}
+/* Booking form session fields */
+.form-input.readonly-session{
+  opacity:.82;
+  border-color:rgba(112,186,244,.28);
+  background:rgba(112,186,244,.055);
+}
+.session-note{font-size:.7rem;color:rgba(112,186,244,.82);margin-top:.35rem;}
+.ml-btn:disabled{opacity:.55;cursor:not-allowed;transform:none!important;}
+.ml-input.shake{animation:otpShake .28s ease;}
+@keyframes otpShake{0%,100%{transform:translateX(0);}25%{transform:translateX(-5px);}75%{transform:translateX(5px);}}
+
 </style>
 
 <!-- EmailJS SDK for email OTP login -->
@@ -2252,6 +2263,11 @@ html[data-admin-active] #memberLoginPage{
       </div>
       <p class="section-label sl-purple">Your Details</p>
       <div class="form-group"><label class="form-label">Band Name</label><input type="text" class="form-input" id="inp-band" placeholder="e.g. The Velvet Strings"></div>
+      <div class="form-group">
+        <label class="form-label">Logged-in Email</label>
+        <input type="email" class="form-input readonly-session" id="inp-email" placeholder="Email will auto-fill after login" readonly>
+        <div class="session-note">This email comes from OTP login and will stay with your request locally.</div>
+      </div>
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Phone Number</label>
@@ -3734,6 +3750,27 @@ function renderVenueList() {
     }).join('');
   }
   
+function fillBookingFormFromSession() {
+  try {
+    const emailInp = document.getElementById('inp-email');
+    if (emailInp) emailInp.value = memberEmail || '';
+
+    const phoneInp = document.getElementById('inp-phone');
+    if (phoneInp && memberPhone && !phoneInp.value) {
+      phoneInp.value = memberPhone;
+      validatePhone();
+    }
+
+    const bandInp = document.getElementById('inp-band');
+    if (bandInp && !bandInp.value && memberName) {
+      bandInp.value = memberName.trim();
+    }
+
+    validateForm();
+    updateSummary();
+  } catch(e) {}
+}
+
 function pickVenue(id) {
   // Members-only gate
   if (!memberLoggedIn) {
@@ -3744,18 +3781,7 @@ function pickVenue(id) {
   try { localStorage.setItem('ots_selected_venue', id); } catch(e){}
   updateSummary();
   validateForm();
-  // pre-fill phone from member session
-  const phoneInp = document.getElementById('inp-phone');
-  if (phoneInp && memberPhone && !phoneInp.value) {
-    phoneInp.value = memberPhone;
-    validatePhone();
-  }
-  // pre-fill name from member session
-  const bandInp = document.getElementById('inp-band');
-  if (bandInp && !bandInp.value && memberName) {
-    bandInp.value = memberName.trim();
-    validateForm(); updateSummary();
-  }
+  fillBookingFormFromSession();
   // update form badge
   const v = venues.find(x=>x.id===id);
   if (v) {
@@ -4861,7 +4887,7 @@ async function submitBooking() {
     date:      venue.date,
     type:      document.getElementById('inp-type').value,
     name:      document.getElementById('inp-band').value.trim(),
-    email:     '',
+    email:     (document.getElementById('inp-email') ? document.getElementById('inp-email').value.trim() : (memberEmail || '')),
     phone:     document.getElementById('inp-phone').value.trim(),
     notes:     document.getElementById('inp-notes').value.trim(),
     price:     0,
@@ -4899,6 +4925,7 @@ async function submitBooking() {
   }
 
   ['inp-band','inp-phone','inp-notes'].forEach(id=>document.getElementById(id).value='');
+  fillBookingFormFromSession();
   document.getElementById('inp-phone').classList.remove('ok','err');
   document.getElementById('phone-err').textContent='';
   document.getElementById('phone-icon').textContent='';
@@ -7421,6 +7448,22 @@ async function mlSend(isResend) {
 
   if (btn) btn.textContent = 'Sending OTP…';
 
+  // Extra safety: prevent repeated OTP emails to the same address for 60 seconds, even after refresh.
+  try {
+    var lastKey = 'ots_otp_last_sent_' + email;
+    var lastSent = parseInt(localStorage.getItem(lastKey) || '0', 10);
+    var wait = 60 - Math.floor((Date.now() - lastSent) / 1000);
+    if (lastSent && wait > 0 && !isResend) {
+      if (err) err.textContent = 'Please wait ' + wait + ' sec before sending OTP again.';
+      if (btn) { btn.textContent = 'Send OTP →'; btn.disabled = false; }
+      if (resendBtn) resendBtn.disabled = true;
+      return;
+    }
+    localStorage.setItem(lastKey, String(Date.now()));
+  } catch(e) {}
+
+  _mlOtpAttempts = 0;
+
   emailjs.send('service_awhjqdb', 'template_bmpaayd', {
     to_email: email,
     otp: _mlOtp
@@ -7438,6 +7481,7 @@ async function mlSend(isResend) {
   }).catch(function(error){
     console.error('EmailJS OTP failed:', error);
     if (err) err.textContent = 'Could not send OTP. Check EmailJS template/settings and try again.';
+    try { localStorage.removeItem('ots_otp_last_sent_' + email); } catch(e) {}
     if (btn) { btn.textContent = 'Send OTP →'; btn.disabled = false; }
     if (resendBtn) resendBtn.disabled = false;
   });
@@ -7488,11 +7532,26 @@ function mlVerify() {
     return;
   }
   if (entered !== _mlOtp) {
-    if (err) err.textContent = 'Wrong OTP. Try again.';
+    _mlOtpAttempts++;
+    var left = Math.max(0, 5 - _mlOtpAttempts);
+    if (err) err.textContent = left ? ('Wrong OTP. ' + left + ' attempt(s) left.') : 'Too many wrong attempts. Please resend OTP.';
     var otpInput = document.getElementById('mlOtpInput');
-    if (otpInput) { otpInput.value = ''; otpInput.focus(); }
+    if (otpInput) {
+      otpInput.value = '';
+      otpInput.classList.add('shake');
+      setTimeout(function(){ otpInput.classList.remove('shake'); otpInput.focus(); }, 280);
+    }
+    if (_mlOtpAttempts >= 5) {
+      _mlOtp = '';
+      _mlOtpExpiry = 0;
+      var resendBtn = document.getElementById('mlResendBtn');
+      if (resendBtn) resendBtn.disabled = false;
+    }
     return;
   }
+
+  var verifyBtn = document.getElementById('mlVerifyBtn');
+  if (verifyBtn) { verifyBtn.disabled = true; verifyBtn.textContent = 'Entering…'; }
 
   var allowed = _mlOtpMember || {};
   memberLoggedIn = true;
@@ -7507,6 +7566,8 @@ function mlVerify() {
   restoreMyBookingsFromServer();
   clearInterval(_mlOtpTimer);
   closeMemberLogin();
+  fillBookingFormFromSession();
+  var verifyBtn2 = document.getElementById('mlVerifyBtn'); if (verifyBtn2) { verifyBtn2.disabled = false; verifyBtn2.textContent = 'Verify & Enter →'; }
   showToast('✅','Welcome!', 'Signed in as ' + (memberName || memberEmail));
   if (_pendingVenueAfterLogin) {
     var v = _pendingVenueAfterLogin;
@@ -7524,6 +7585,8 @@ function mlBack() {
   document.getElementById('mlErr').textContent = '';
   var t2 = document.getElementById('mlTimerTextStep2'); if (t2) t2.textContent = '';
   var resendBtn = document.getElementById('mlResendBtn'); if (resendBtn) resendBtn.disabled = true;
+  _mlOtpAttempts = 0;
+  var vb = document.getElementById('mlVerifyBtn'); if (vb) { vb.disabled = false; vb.textContent = 'Verify & Enter →'; }
   var ph = document.getElementById('mlPhone'); if (ph) ph.focus();
 }
 
@@ -7590,6 +7653,7 @@ document.addEventListener('DOMContentLoaded', function() {
   if (ph) ph.addEventListener('keydown', function(e) { if (e.key === 'Enter') mlSend(); });
   var oi = document.getElementById('mlOtpInput');
   if (oi) oi.addEventListener('keydown', function(e) { if (e.key === 'Enter') mlVerify(); });
+  fillBookingFormFromSession();
   // Close admin queue panel on outside click
   document.addEventListener('click', function(e) {
     if (!_adminNotifOpen) return;
