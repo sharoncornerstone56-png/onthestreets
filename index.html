@@ -2941,6 +2941,111 @@ textarea{
   }
 }
 
+/* Absolute final mobile scroll mode: keep phone scrolling native and boring. */
+@media(max-width:700px){
+  html,
+  body{
+    height:auto !important;
+    min-height:100% !important;
+    overflow-x:hidden !important;
+    overflow-y:auto !important;
+    overscroll-behavior-y:auto !important;
+    touch-action:auto !important;
+    scroll-behavior:auto !important;
+    -webkit-overflow-scrolling:touch !important;
+  }
+
+  body{
+    padding-bottom:calc(var(--app-bottom-nav,64px) + env(safe-area-inset-bottom) + 10px) !important;
+  }
+
+  *,
+  *::before,
+  *::after{
+    animation:none !important;
+    transition:none !important;
+    scroll-behavior:auto !important;
+    filter:none !important;
+    backdrop-filter:none !important;
+    -webkit-backdrop-filter:none !important;
+    content-visibility:visible !important;
+    contain:none !important;
+    contain-intrinsic-size:auto !important;
+    -webkit-tap-highlight-color:transparent !important;
+  }
+
+  body,
+  .page,
+  .page.active,
+  .venues-page-wrap,
+  .booking-grid,
+  .myrequests-wrap,
+  .leaderboard-wrap,
+  .profile-centered-wrap,
+  .page-inner,
+  .calendar-panel,
+  .venue-list-panel,
+  .venue-row-card,
+  .vds-item,
+  .vds-header,
+  .cal-day,
+  .date-strip,
+  .perf-strip-wrap{
+    touch-action:auto !important;
+    -webkit-overflow-scrolling:touch !important;
+    overscroll-behavior-y:auto !important;
+  }
+
+  button,
+  input,
+  select,
+  textarea,
+  .mn-item,
+  .btn-book,
+  .btn-back-home,
+  .vrc-select-btn{
+    touch-action:manipulation !important;
+  }
+
+  .page.active{
+    overflow:visible !important;
+    transform:none !important;
+  }
+
+  .nav{
+    position:relative !important;
+    transform:none !important;
+    box-shadow:none !important;
+  }
+
+  #mobile-nav{
+    position:fixed !important;
+    left:0 !important;
+    right:0 !important;
+    bottom:0 !important;
+    transform:translate3d(0,0,0) !important;
+    will-change:transform !important;
+    box-shadow:none !important;
+  }
+
+  body.ots-native-scrolling #mobile-nav{
+    transform:translate3d(0, calc(100% + env(safe-area-inset-bottom)), 0) !important;
+    pointer-events:none !important;
+  }
+
+  .venue-row-card,
+  .venue-card,
+  .booking-item,
+  .panel,
+  .summary-card,
+  .bookings-panel,
+  .profile-card,
+  .prof-section,
+  .calendar-panel{
+    box-shadow:none !important;
+  }
+}
+
 </style>
 
 <!-- EmailJS SDK for email OTP login -->
@@ -10089,6 +10194,39 @@ document.addEventListener('visibilitychange', function(){
 
 // Clerk login removed: EmailJS OTP login is active.
 
+</script>
+
+<script>
+(function(){
+  function isPhoneScrollMode() {
+    return !!(window.matchMedia && window.matchMedia('(max-width: 700px), (pointer: coarse)').matches);
+  }
+  if (!isPhoneScrollMode()) return;
+
+  var endTimer = null;
+  var active = false;
+  function startNativeScroll() {
+    if (!active) {
+      document.body.classList.add('ots-native-scrolling');
+      active = true;
+    }
+    clearTimeout(endTimer);
+    endTimer = setTimeout(stopNativeScroll, 180);
+  }
+  function stopNativeScroll() {
+    clearTimeout(endTimer);
+    document.body.classList.remove('ots-native-scrolling');
+    active = false;
+  }
+
+  window.addEventListener('scroll', startNativeScroll, { passive:true });
+  window.addEventListener('touchmove', startNativeScroll, { passive:true });
+  window.addEventListener('touchend', function(){
+    clearTimeout(endTimer);
+    endTimer = setTimeout(stopNativeScroll, 140);
+  }, { passive:true });
+  window.addEventListener('touchcancel', stopNativeScroll, { passive:true });
+})();
 </script>
 
 
