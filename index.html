@@ -4040,6 +4040,7 @@ const NEON_SQL_URL = isReplit
 const NEON_HDR = isReplit
   ? { 'Content-Type': 'application/json', 'Neon-Connection-String': NEON_CONN }
   : { 'Neon-Connection-String': NEON_CONN };
+const NEON_TIMEOUT_MS = 20000;
 
 // -- Neon DB: No realtime WebSocket - using polling for cross-device sync --
 // (Polling was already the backup mechanism; now it's the primary one)
@@ -4227,7 +4228,7 @@ async function neonSQL(query, params) {
   if (typeof AbortController !== 'undefined') {
     controller = new AbortController();
     fetchOpts.signal = controller.signal;
-    timeoutId = setTimeout(function(){ try { controller.abort(); } catch(e){} }, 12000);
+    timeoutId = setTimeout(function(){ try { controller.abort(); } catch(e){} }, NEON_TIMEOUT_MS);
   }
   let r;
   try {
@@ -4407,6 +4408,9 @@ function showVenueLiveLoading(msg) {
 }
 let _liveRefreshInFlight = null;
 let _lastLiveRefreshAt = 0;
+const LIVE_FAST_MS = 2500;
+const LIVE_STATUS_MS = 3000;
+const LIVE_GIG_MS = 15000;
 
 async function refreshLiveCoreData(opts) {
   opts = opts || {};
@@ -4427,32 +4431,47 @@ async function refreshLiveCoreDataNow(opts) {
   if (opts.showLoading && !(opts.silentIfCached && venues && venues.length)) showVenueLiveLoading('Fetching latest venues from Neon...');
   showSyncStatus(' Loading live data...','var(--blue)');
 
-  // FIX: Load venues first and independently. Optional tables must not break venue display.
+  // Load venues first and render them immediately. Optional tables must not block venue display.
   let vRows = [], bRows = [], sRows = [];
 
   try {
     vRows = await neonSQL('SELECT id,name,day,date,time_start,time_end,confirm_status,visibility,status,image_url FROM venues ORDER BY date ASC, time_start ASC');
   } catch (e) {
-    console.error('[OTS] CRITICAL: venues load failed:', e && (e.message || e));
+    if (!opts._retry) {
+      console.warn('[OTS] venues load slow, retrying once:', e && (e.message || e));
+      await new Promise(function(res){ setTimeout(res, 900); });
+      return refreshLiveCoreDataNow(Object.assign({}, opts, { _retry:true, showLoading:false }));
+    }
+    console.error('[OTS] CRITICAL: venues load failed after retry:', e && (e.message || e));
     throw e;
-  }
-
-  try {
-    bRows = await neonSQL('SELECT id,venue_id,venue,date,type,name,phone,email,notes,status,created_at,proof_url,proof_claimed,checkin_at FROM bookings ORDER BY created_at DESC LIMIT 300');
-  } catch (e) {
-    console.warn('[OTS] bookings optional load skipped:', e && (e.message || e));
-    bRows = [];
-  }
-
-  try {
-    sRows = await neonSQL('SELECT key,value FROM settings');
-  } catch (e) {
-    console.warn('[OTS] settings optional load skipped:', e && (e.message || e));
-    sRows = [];
   }
 
   venues = mapVenueRows(vRows);
   console.log('[OTS] Live venues loaded:', venues.length, venues.slice(0, 5));
+  renderCalendar();
+  renderVenueList();
+  renderVenueManager();
+  updateHeroStats();
+  updateAdminStats();
+  showSyncStatus(' Live venues updated','var(--green)');
+
+  const optionalResults = await Promise.allSettled([
+    neonSQL('SELECT id,venue_id,venue,date,type,name,phone,email,notes,status,created_at,proof_url,proof_claimed,checkin_at FROM bookings ORDER BY created_at DESC LIMIT 300'),
+    neonSQL('SELECT key,value FROM settings')
+  ]);
+  if (optionalResults[0].status === 'fulfilled') {
+    bRows = optionalResults[0].value || [];
+  } else {
+    console.warn('[OTS] bookings optional load skipped:', optionalResults[0].reason && (optionalResults[0].reason.message || optionalResults[0].reason));
+    bRows = [];
+  }
+  if (optionalResults[1].status === 'fulfilled') {
+    sRows = optionalResults[1].value || [];
+  } else {
+    console.warn('[OTS] settings optional load skipped:', optionalResults[1].reason && (optionalResults[1].reason.message || optionalResults[1].reason));
+    sRows = [];
+  }
+
   allBookings = mapBookingRows(bRows);
 
   if (memberLoggedIn) {
@@ -5213,22 +5232,57 @@ function startAdminPolling() {
         if (changed && currentAdminTab) {
           // Only re-render the current tab UI - no need to re-fetch from Neon
           _refreshAdminUI();
-          // Do a full Neon refresh once per 5 ticks (every ~12s) to stay in sync
+          // Do a full Neon refresh once per 4 ticks to keep venues/bookings tight.
           _pollTickCount = (_pollTickCount || 0) + 1;
-          if (_pollTickCount >= 5) { _pollTickCount = 0; refreshAdmin(); }
+          if (_pollTickCount >= 4) { _pollTickCount = 0; refreshAdmin(); }
         } else if (!changed) {
           // Nothing changed - still bump the full-refresh counter
           _pollTickCount = (_pollTickCount || 0) + 1;
-          if (_pollTickCount >= 5) { _pollTickCount = 0; if (currentAdminTab) refreshAdmin(); }
+          if (_pollTickCount >= 4) { _pollTickCount = 0; if (currentAdminTab) refreshAdmin(); }
         }
       })
       .catch(function(){});
-  }, 8000); // primary sync mechanism for Neon (slightly faster than Supabase version)
+  }, LIVE_FAST_MS); // fast cross-device sync for Neon
 }
 function stopAdminPolling() {
   if (_adminPollTimer) { clearInterval(_adminPollTimer); _adminPollTimer = null; }
   _knownBookingIds = null;
 }
+
+let _liveKeepWarmTimer = null;
+function startLiveKeepWarm() {
+  if (_liveKeepWarmTimer) return;
+  _liveKeepWarmTimer = setInterval(function(){
+    if (document.hidden) return;
+    neonSQL('SELECT 1 AS ok').catch(function(){});
+  }, 20000);
+}
+startLiveKeepWarm();
+
+let _lastFocusLiveRefreshAt = 0;
+function refreshLiveOnFocus() {
+  if (document.hidden) return;
+  var now = Date.now();
+  if (now - _lastFocusLiveRefreshAt < 1500) return;
+  _lastFocusLiveRefreshAt = now;
+  if (adminLoggedIn) {
+    refreshAdmin();
+    updateAdminNotifCount();
+    return;
+  }
+  if (memberLoggedIn) {
+    fetchMyBookingsLive();
+    refreshLiveCoreData({ showLoading:false, silentIfCached:true, maxAgeMs:1000 }).catch(function(){});
+  } else {
+    refreshLiveCoreData({ showLoading:false, silentIfCached:true, maxAgeMs:1000 }).catch(function(){});
+  }
+}
+document.addEventListener('visibilitychange', function(){
+  if (!document.hidden) setTimeout(refreshLiveOnFocus, 80);
+});
+window.addEventListener('focus', function(){
+  setTimeout(refreshLiveOnFocus, 80);
+});
 
 
 // ========================================
@@ -6383,29 +6437,18 @@ function updatePendingBadge() {
 function refreshAdmin() {
   // Also load members (non-blocking)
   loadMembers().catch(()=>{});
-  // Pull latest from Neon so admin always sees live data
-  Promise.all([sbGet('venues'), sbGet('bookings'), sbGet('gallery')])
-    .then(([vRows, bRows, gRows]) => {
-      venues = vRows.map(v=>({
-        id:v.id,name:v.name,day:v.day||'',date:v.date||'',
-        timeStart:v.time_start||'',timeEnd:v.time_end||'',
-        confirmStatus:v.confirm_status||'Available',
-        visibility:v.visibility||'Public',status:v.status||'open',
-        imageUrl:v.image_url||''
-      }));
-      allBookings = bRows.map(b=>({
-        id:b.id,venueId:b.venue_id||'',venue:b.venue||'',
-        date:b.date||'',type:b.type||'',name:b.name||'',
-        phone:b.phone||'',notes:b.notes||'',
-        status:b.status||'pending',createdAt:b.created_at||'',
-        proofUrl:b.proof_url||'',proofClaimed:!!b.proof_claimed,
-        checkinAt:b.checkin_at||null
-      }));
-      galleryPhotos = gRows.filter(g => !g.id || !g.id.startsWith("perf_")).map(g=>({id:g.id,url:g.url,caption:g.caption||""}));
-      saveLocal();
-    })
-    .catch(()=>{})
-    .finally(()=>{ _refreshAdminUI(); });
+  // Pull venues/bookings first; gallery is heavier and must not delay admin live data.
+  Promise.allSettled([
+    neonSQL('SELECT id,name,day,date,time_start,time_end,confirm_status,visibility,status,image_url FROM venues ORDER BY date ASC, time_start ASC'),
+    neonSQL('SELECT id,venue_id,venue,date,type,name,phone,email,notes,status,created_at,proof_url,proof_claimed,checkin_at FROM bookings ORDER BY created_at DESC LIMIT 300')
+  ]).then(function(results){
+    if (results[0].status === 'fulfilled') venues = mapVenueRows(results[0].value || []);
+    if (results[1].status === 'fulfilled') allBookings = mapBookingRows(results[1].value || []);
+    saveLocal();
+    _refreshAdminUI();
+  }).catch(function(){}).finally(function(){
+    loadGalleryLiveInBackground();
+  });
 }
 function _refreshAdminUI() {
   updateAdminStats();
@@ -7255,7 +7298,7 @@ let _pollTimer = null;
 function startStatusPolling() {
   stopStatusPolling();
   pollMyBookingStatuses(); // fire immediately
-  _pollTimer = setInterval(function(){ if (!document.hidden) pollMyBookingStatuses(); }, 8000);
+  _pollTimer = setInterval(function(){ if (!document.hidden) pollMyBookingStatuses(); }, LIVE_STATUS_MS);
 }
 function stopStatusPolling() {
   clearInterval(_pollTimer);
@@ -7266,7 +7309,8 @@ function stopStatusPolling() {
 let _myReqPollTimer = null;
 function startMyRequestsPoll() {
   stopMyRequestsPoll();
-  _myReqPollTimer = setInterval(function(){ if (!document.hidden) fetchMyBookingsLive(); }, 10000);
+  fetchMyBookingsLive();
+  _myReqPollTimer = setInterval(function(){ if (!document.hidden) fetchMyBookingsLive(); }, LIVE_STATUS_MS);
 }
 function stopMyRequestsPoll() {
   clearInterval(_myReqPollTimer);
@@ -7305,7 +7349,7 @@ function startGigPoll() {
       });
       renderGigCalendar();
     } catch(e) { /* silent - keep showing last known data */ }
-  }, 60000); // every 60 seconds
+  }, LIVE_GIG_MS); // faster live sync for confirmed shows
 }
 
 async function pollMyBookingStatuses() {
