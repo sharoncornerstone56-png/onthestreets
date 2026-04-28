@@ -3694,8 +3694,10 @@ let calMonth = new Date().getMonth(); // 0-based
 let selectedCalDate = null;
 
 function getVenueDates() {
-  const todayStr = new Date().toISOString().slice(0,10);
-  return new Set(venues.filter(v=>isVenueOpen(v) && normalizeVenueDate(v.date) >= todayStr).map(v=>normalizeVenueDate(v.date)));
+  // Show every open venue on the calendar, regardless of date. The admin is the
+  // source of truth — if a venue is in the manager and open, the user side must
+  // see it too. Admin can close a venue to hide it.
+  return new Set(venues.filter(v=>isVenueOpen(v) && normalizeVenueDate(v.date)).map(v=>normalizeVenueDate(v.date)));
 }
 function calPrev() {
   calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; }
@@ -3778,11 +3780,12 @@ function renderVenueList() {
     const list  = document.getElementById('venueList');
     const title = document.getElementById('venueListTitle');
 
-    const todayStr = new Date().toISOString().slice(0,10);
-
-    // Always group all open venues by date — tapping a calendar date just scrolls to that group
+    // Group every open venue by date. We deliberately do NOT filter out past
+    // dates here — admin's venue manager is the source of truth. If a venue is
+    // open in the manager, it must appear on the user-facing list. Admin can
+    // close (or delete) a venue to remove it from the user view.
     const dateMap = {};
-    venues.filter(v => isVenueOpen(v) && normalizeVenueDate(v.date) && normalizeVenueDate(v.date) >= todayStr).forEach(v => {
+    venues.filter(v => isVenueOpen(v) && normalizeVenueDate(v.date)).forEach(v => {
       var vd = normalizeVenueDate(v.date);
       v.date = vd;
       if (!dateMap[vd]) dateMap[vd] = [];
