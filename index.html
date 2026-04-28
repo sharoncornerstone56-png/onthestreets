@@ -3452,15 +3452,42 @@ async function refreshLiveCoreData(opts) {
   opts = opts || {};
   if (opts.showLoading) showVenueLiveLoading('Fetching latest venues from Neon…');
   showSyncStatus('⚡ Loading live data…','var(--blue)');
-  const [vRows, bRows, sRows] = await Promise.all([
-    neonSQL('SELECT id,name,day,date,time_start,time_end,confirm_status,visibility,status,image_url FROM venues ORDER BY date ASC, time_start ASC'),
-    neonSQL('SELECT id,venue_id,venue,date,type,name,phone,email,price,notes,status,created_at,proof_url,proof_claimed,checkin_at FROM bookings ORDER BY created_at DESC LIMIT 300'),
-    neonSQL('SELECT key,value FROM settings')
-  ]);
+
+  // FIX: Load venues first and independently. Optional tables must not break venue display.
+  let vRows = [], bRows = [], sRows = [];
+
+  try {
+    vRows = await neonSQL('SELECT id,name,day,date,time_start,time_end,confirm_status,visibility,status,image_url FROM venues ORDER BY date ASC, time_start ASC');
+  } catch (e) {
+    console.error('[OTS] CRITICAL: venues load failed:', e && (e.message || e));
+    throw e;
+  }
+
+  try {
+    bRows = await neonSQL('SELECT id,venue_id,venue,date,type,name,phone,email,price,notes,status,created_at,proof_url,proof_claimed,checkin_at FROM bookings ORDER BY created_at DESC LIMIT 300');
+  } catch (e) {
+    console.warn('[OTS] bookings optional load skipped:', e && (e.message || e));
+    bRows = [];
+  }
+
+  try {
+    sRows = await neonSQL('SELECT key,value FROM settings');
+  } catch (e) {
+    console.warn('[OTS] settings optional load skipped:', e && (e.message || e));
+    sRows = [];
+  }
+
   venues = mapVenueRows(vRows);
   console.log('[OTS] Live venues loaded:', venues.length, venues.slice(0, 5));
   allBookings = mapBookingRows(bRows);
-  if (memberLoggedIn) { await loadDismissedRemote(); await loadDismissedNotifsRemote(); }
+
+  if (memberLoggedIn) {
+    Promise.allSettled([loadDismissedRemote(), loadDismissedNotifsRemote()]).then(function(){
+      renderUserBookings();
+      updateNotifBadge();
+    });
+  }
+
   (sRows || []).forEach(function(row){ if(row.key==='admin_phone') adminPhone=row.value||''; });
   let statusChanged = false;
   myBookings = loadMyBookings().map(function(mb) {
