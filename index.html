@@ -4315,38 +4315,43 @@ function saveLocal() {
   saveMyBookings();
 }
 
+async function saveRemoteNow(showToastOnFail) {
+  showSyncStatus(' Syncing live...','var(--yellow)');
+  // Map JS camelCase  DB snake_case for venues
+  const venueRows = venues.map(v=>({
+    id:v.id, name:v.name, day:v.day||'', date:v.date||'',
+    time_start:v.timeStart||'', time_end:v.timeEnd||'',
+    confirm_status:v.confirmStatus||'Available',
+    visibility:v.visibility||'Public', status:v.status||'open',
+    image_url:v.imageUrl||''
+  }));
+  const bookingRows = allBookings.map(b=>({
+    id:b.id, venue_id:b.venueId||'', venue:b.venue||'',
+    date:b.date||'', type:b.type||'', name:b.name||'',
+    phone:b.phone||'', email:b.email||'',
+    notes:b.notes||'',
+    status:b.status||'pending', created_at:b.createdAt||new Date().toISOString()
+  }));
+  const galleryRows = galleryPhotos.map(p=>({id:p.id,url:p.url,caption:p.caption||''}));
+
+  try {
+    if(venueRows.length)   await sbUpsert('venues',  venueRows);
+    if(bookingRows.length) await sbUpsert('bookings',bookingRows);
+    if(galleryRows.length) await sbUpsert('gallery', galleryRows);
+    showSyncStatus(' Saved to Neon','var(--green)');
+    return true;
+  } catch(e) {
+    console.error('Neon save error:', e && (e.message || JSON.stringify(e)));
+    showSyncStatus(' Saved on this device only','var(--orange)');
+    if (showToastOnFail) showToast('', 'Live Sync Failed', 'Saved here, but Neon did not accept the update. Other devices will not see it yet.');
+    return false;
+  }
+}
+
 // -- Save all tables to Neon (debounced) --
 function saveRemote() {
   clearTimeout(_syncTimer);
-  _syncTimer = setTimeout(async ()=>{
-    try {
-      showSyncStatus(' Syncing...','var(--yellow)');
-      // Map JS camelCase  DB snake_case for venues
-      const venueRows = venues.map(v=>({
-        id:v.id, name:v.name, day:v.day||'', date:v.date||'',
-        time_start:v.timeStart||'', time_end:v.timeEnd||'',
-        confirm_status:v.confirmStatus||'Available',
-        visibility:v.visibility||'Public', status:v.status||'open',
-        image_url:v.imageUrl||''
-      }));
-      const bookingRows = allBookings.map(b=>({
-        id:b.id, venue_id:b.venueId||'', venue:b.venue||'',
-        date:b.date||'', type:b.type||'', name:b.name||'',
-        phone:b.phone||'', email:b.email||'',
-        notes:b.notes||'',
-        status:b.status||'pending', created_at:b.createdAt||new Date().toISOString()
-      }));
-      const galleryRows = galleryPhotos.map(p=>({id:p.id,url:p.url,caption:p.caption||''}));
-
-      if(venueRows.length)   await sbUpsert('venues',  venueRows);
-      if(bookingRows.length) await sbUpsert('bookings',bookingRows);
-      if(galleryRows.length) await sbUpsert('gallery', galleryRows);
-      showSyncStatus(' Saved to Neon','var(--green)');
-    } catch(e) {
-      console.error('Neon save error:', e && (e.message || JSON.stringify(e)));
-      showSyncStatus(' Saved locally only','var(--orange)');
-    }
-  }, 600);
+  _syncTimer = setTimeout(function(){ saveRemoteNow(false); }, 600);
 }
 
 function saveAll() { saveLocal(); saveRemote(); }
@@ -6891,7 +6896,9 @@ function saveVenue() {
       showToast('','Venue Added',`"${name}" is now live on the booking page.`);
     }
     closeVenueModal();
-    renderVenueManager(); renderVenueList(); updateHeroStats(); updateAdminStats(); saveAll();
+    renderVenueManager(); renderVenueList(); updateHeroStats(); updateAdminStats();
+    saveLocal();
+    saveRemoteNow(true);
   } catch(e) {
     console.error('[OTS] saveVenue failed:', e);
     showToast('', 'Save Failed', (e && e.message) ? e.message : 'Could not save venue. Please try again.');
