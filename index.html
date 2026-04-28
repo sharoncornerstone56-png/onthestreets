@@ -7915,8 +7915,7 @@ function _fetchAndApplyMemberAvatar() {
     memberInstagram  = r.instagram     || '';
     memberBloodGroup = r.blood_group   || '';
     memberDob        = r.date_of_birth || '';
-      memberAddress    = r.address       || localStorage.getItem('member_address') || '';
-    memberAddress    = r.address       || '';
+    memberAddress    = r.address       || localStorage.getItem('member_address') || '';
     memberZoneCurrent = r.zone_current || '';
     memberZoneRequest = r.zone_request || '';
     memberZoneRequestReason = r.zone_request_reason || '';
@@ -8349,6 +8348,20 @@ async function loadMembers() {
   } catch(e) { console.warn('loadMembers failed:', e); }
 }
 
+function otsEscapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch];
+  });
+}
+
+function otsJsString(value) {
+  return String(value == null ? '' : value)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
+}
+
 function renderMembersTable() {
   const body  = document.getElementById('membersTableBody');
   const count = document.getElementById('memberCount');
@@ -8362,26 +8375,29 @@ function renderMembersTable() {
   body.innerHTML = members.map((m, i) => {
     var zoneText = m.zoneCurrent || '-';
     var pending = m.zoneRequestStatus === 'pending' && m.zoneRequest;
+    var memberId = otsJsString(m.id);
+    var memberNameHtml = m.name ? otsEscapeHtml(m.name) : '<span style="color:var(--muted);font-style:italic;">-</span>';
+    var pendingHtml = pending ? ' <span style="color:var(--yellow);">- Pending ' + otsEscapeHtml(m.zoneRequest) + '</span>' : '';
     return `
     <div class="members-tbl-row">
       <div style="color:var(--muted);font-size:.8rem;">${i + 1}</div>
       <div style="font-size:.88rem;font-weight:500;">
-        ${m.name || '<span style="color:var(--muted);font-style:italic;">-</span>'}
-        <div style="font-size:.68rem;color:var(--muted);margin-top:.2rem;">Zone: ${zoneText}${pending ? ' <span style="color:var(--yellow);">- Pending  ' + m.zoneRequest + '</span>' : ''}</div>
+        ${memberNameHtml}
+        <div style="font-size:.68rem;color:var(--muted);margin-top:.2rem;">Zone: ${otsEscapeHtml(zoneText)}${pendingHtml}</div>
       </div>
-      <div style="font-size:.78rem;color:#70BAF4;word-break:break-all;">${m.email || '<span style="color:rgba(244,240,255,.3);font-style:italic;">-</span>'}</div>
-      <div style="font-size:.82rem;font-family:monospace;">${m.phone || '<span style="color:rgba(244,240,255,.3);font-style:italic;">-</span>'}</div>
-      <div style="font-size:.75rem;color:var(--muted);">${m.addedAt ? m.addedAt.slice(0,10) : '-'}</div>
+      <div style="font-size:.78rem;color:#70BAF4;word-break:break-all;">${m.email ? otsEscapeHtml(m.email) : '<span style="color:rgba(244,240,255,.3);font-style:italic;">-</span>'}</div>
+      <div style="font-size:.82rem;font-family:monospace;">${m.phone ? otsEscapeHtml(m.phone) : '<span style="color:rgba(244,240,255,.3);font-style:italic;">-</span>'}</div>
+      <div style="font-size:.75rem;color:var(--muted);">${m.addedAt ? otsEscapeHtml(m.addedAt.slice(0,10)) : '-'}</div>
       <div style="display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;">
-        <button onclick="openMemberProfileAdmin('${m.id}', false)" style="background:rgba(112,186,244,.08);border:1px solid rgba(112,186,244,.3);color:#70BAF4;font-size:.68rem;padding:.18rem .5rem;border-radius:2px;cursor:pointer;">View</button>
-        <button onclick="openMemberProfileAdmin('${m.id}', true)" style="background:rgba(158,118,204,.1);border:1px solid rgba(158,118,204,.35);color:var(--purple);font-size:.68rem;padding:.18rem .5rem;border-radius:2px;cursor:pointer;">Edit</button>
+        <button data-member-id="${otsEscapeHtml(m.id)}" data-member-mode="view" onclick="openMemberProfileAdmin('${memberId}', false)" style="background:rgba(112,186,244,.08);border:1px solid rgba(112,186,244,.3);color:#70BAF4;font-size:.68rem;padding:.18rem .5rem;border-radius:2px;cursor:pointer;">View</button>
+        <button data-member-id="${otsEscapeHtml(m.id)}" data-member-mode="edit" onclick="openMemberProfileAdmin('${memberId}', true)" style="background:rgba(158,118,204,.1);border:1px solid rgba(158,118,204,.35);color:var(--purple);font-size:.68rem;padding:.18rem .5rem;border-radius:2px;cursor:pointer;">Edit</button>
         
         <span class="member-status-badge ${m.active !== false ? 'active' : 'inactive'}"
               style="cursor:pointer;" title="Toggle active/inactive"
-              onclick="toggleMemberActive('${m.id}', ${m.active !== false})">
+              onclick="toggleMemberActive('${memberId}', ${m.active !== false})">
           ${m.active !== false ? ' Active' : ' Inactive'}
         </span>
-        <button onclick="deleteMember('${m.id}')"
+        <button onclick="deleteMember('${memberId}')"
           style="background:transparent;border:1px solid rgba(255,107,107,.3);color:var(--red);font-size:.68rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:.18rem .5rem;cursor:pointer;border-radius:2px;">x</button>
       </div>
     </div>`;
@@ -8908,7 +8924,10 @@ function openMemberProfileAdmin(id, editMode) {
     if (approveBtn) approveBtn.style.display = (m.zoneRequestStatus === 'pending' && m.zoneRequest) ? '' : 'none';
 
     var modal = document.getElementById('memberProfileAdminModal');
-    if (modal) modal.classList.add('show');
+    if (modal) {
+      modal.style.display = 'flex';
+      modal.classList.add('show');
+    }
   } catch (e) {
     console.error(e);
     showToast('', 'Open failed', 'Could not open member profile.');
@@ -8918,7 +8937,10 @@ function openMemberProfileAdmin(id, editMode) {
 
 function closeMemberProfileAdmin() {
   var modal = document.getElementById('memberProfileAdminModal');
-  if (modal) modal.classList.remove('show');
+  if (modal) {
+    modal.classList.remove('show');
+    modal.style.display = 'none';
+  }
   _memberAdminCurrentId = '';
   _memberAdminEditMode = false;
 }
@@ -9037,15 +9059,19 @@ document.addEventListener('click', function(ev){
     var text = (btn.textContent || '').trim().toLowerCase();
     if (text !== 'view' && text !== 'edit') return;
 
-    var body = document.getElementById('membersTableBody');
-    if (!body) return;
-    var buttons = Array.from(body.querySelectorAll('.members-tbl-row button'));
-    var idx = Array.from(body.querySelectorAll('.members-tbl-row')).indexOf(row);
-    if (idx < 0 || !Array.isArray(members) || !members[idx]) return;
+    var memberId = btn.getAttribute('data-member-id') || '';
+    if (!memberId) {
+      var body = document.getElementById('membersTableBody');
+      if (!body) return;
+      var idx = Array.from(body.querySelectorAll('.members-tbl-row')).indexOf(row);
+      if (idx < 0 || !Array.isArray(members) || !members[idx]) return;
+      memberId = members[idx].id;
+    }
+    if (!members.find(function(m){ return String(m.id) === String(memberId); })) return;
 
     ev.preventDefault();
     ev.stopPropagation();
-    _openMemberProfileAdminNow(members[idx].id, text === 'edit');
+    _openMemberProfileAdminNow(memberId, text === 'edit');
   } catch (e) {
     console.error('member button delegation failed:', e);
   }
