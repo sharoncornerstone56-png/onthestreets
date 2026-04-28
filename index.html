@@ -2197,10 +2197,23 @@ textarea{
   }
   .perf-strip-wrap{
     margin-top:.5rem;
+    padding-left:.9rem;
+    padding-right:.9rem;
   }
   .perf-img-card{
-    min-width:150px;
-    height:96px;
+    width:min(78vw,300px)!important;
+    min-width:min(78vw,300px)!important;
+    height:auto!important;
+    aspect-ratio:16/9;
+    background:#0d0b1a;
+  }
+  .perf-img-card img{
+    object-fit:contain!important;
+    background:#0d0b1a;
+    transform:none!important;
+  }
+  .perf-img-card:hover img{
+    transform:none!important;
   }
   .cta-dashboard{
     padding:1rem .9rem!important;
@@ -2601,7 +2614,7 @@ textarea{
         <h2 style="font-family:'Playfair Display',serif;font-size:1.8rem;font-weight:900;margin-bottom:.3rem;">Pick a Date & Venue</h2>
         <p style="font-size:.85rem;color:var(--muted);">Select a date from the calendar to see available venues</p>
       </div>
-      <button class="btn-back-home" onclick="showPage('home')">Back Back</button>
+      <button class="btn-back-home" onclick="history.length > 1 ? history.back() : showPage('home')">Back</button>
     </div>
 
     <div class="venues-layout">
@@ -2647,7 +2660,7 @@ textarea{
   <div class="booking-grid">
     <div class="panel">
       <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.8rem;">
-        <button class="btn-back-home" onclick="showPage('venues')">Back Change Venue</button>
+        <button class="btn-back-home" onclick="history.length > 1 ? history.back() : showPage('venues')">Change Venue</button>
         <div id="form-venue-badge" style="font-size:.82rem;color:var(--muted);"></div>
       </div>
       <p class="section-label sl-purple">Your Details</p>
@@ -2699,7 +2712,7 @@ textarea{
 <div class="page" id="page-myrequests">
   <div class="myrequests-wrap">
     <div class="myrequests-header">
-      <button class="btn-back-home" onclick="showPage('venues')" style="margin-bottom:0;">Back Back to Venues</button>
+      <button class="btn-back-home" onclick="history.length > 1 ? history.back() : showPage('venues')" style="margin-bottom:0;">Back to Venues</button>
     </div>
 
     <!-- Member personal stats (hidden when not logged in) -->
@@ -2739,13 +2752,13 @@ textarea{
 <div class="page" id="page-leaderboard">
   <div class="leaderboard-wrap">
     <div class="lb-header">
-      <button class="btn-back-home" onclick="showPage('home')" style="white-space:nowrap;">Back Home</button>
+      <button class="btn-back-home" onclick="history.length > 1 ? history.back() : showPage('home')" style="white-space:nowrap;">Back</button>
       <div class="lb-title-block">
         <div class="lb-eyebrow"> OTS Hall of Fame</div>
         <h2 class="lb-title">Performer <span class="hl">Leaderboard</span></h2>
         <p class="lb-sub">Ranked by confirmed street performances - 1 show = 1 point - with live Zone A / B / C battle</p>
       </div>
-      <button class="lb-refresh" onclick="loadLeaderboard()" style="white-space:nowrap;">Refresh Refresh</button>
+      <button class="lb-refresh" onclick="loadLeaderboard()" style="white-space:nowrap;">Refresh</button>
     </div>
     <div class="lb-search-wrap">
       <input class="lb-search-bar" id="lbSearchInput" type="search" placeholder=" Search performer..." oninput="filterLeaderboard(this.value)">
@@ -3068,7 +3081,7 @@ textarea{
           <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;">Point Claims</div>
           <div style="font-size:.82rem;color:var(--muted);margin-top:.2rem;">Review proof photos and approve or reject each member's show point.</div>
         </div>
-        <button onclick="loadAdminClaims()" style="background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);font-family:'DM Sans',sans-serif;font-size:.75rem;font-weight:700;padding:.5rem 1rem;border-radius:3px;cursor:pointer;">Refresh Refresh</button>
+        <button onclick="loadAdminClaims()" style="background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);font-family:'DM Sans',sans-serif;font-size:.75rem;font-weight:700;padding:.5rem 1rem;border-radius:3px;cursor:pointer;">Refresh</button>
       </div>
       <div id="adminClaimsList"><div class="table-empty"><span class="emoji"></span>No pending claims.</div></div>
     </div>
@@ -3185,7 +3198,7 @@ textarea{
           </div>
           <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
             <input type="text" id="withdraw-search" class="form-input" placeholder="Search by name or phone..." oninput="filterWithdrawList(this.value)" style="width:200px;margin-bottom:0;font-size:.78rem;padding:.45rem .75rem;">
-            <button onclick="loadWithdrawList()" style="background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);font-family:'DM Sans',sans-serif;font-size:.75rem;padding:.45rem .9rem;border-radius:3px;cursor:pointer;">Refresh Refresh</button>
+            <button onclick="loadWithdrawList()" style="background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);font-family:'DM Sans',sans-serif;font-size:.75rem;padding:.45rem .9rem;border-radius:3px;cursor:pointer;">Refresh</button>
           </div>
         </div>
         <div id="withdrawList"><div style="color:var(--muted);font-size:.83rem;text-align:center;padding:2rem;">Click Refresh to load approved points.</div></div>
@@ -3958,6 +3971,14 @@ function renderAfterLoad() {
 // PAGE NAVIGATION
 // =======================================
 function showPage(page) {
+  if (window._otsHandlePageHistory !== false && window.history && window.history.pushState) {
+    try {
+      var currentStatePage = history.state && history.state.otsPage;
+      if (currentStatePage !== page) {
+        history.pushState({ otsPage: page }, '', '#'+page);
+      }
+    } catch(e) {}
+  }
   // Persist current page so refresh restores it (never persist admin page)
   if (page !== 'admin') {
     try { localStorage.setItem('ots_current_page', page); } catch(e){}
@@ -4020,7 +4041,23 @@ function showPage(page) {
     _adminNotifTimer = null;
   }
   window.scrollTo(0,0);
+  setTimeout(function(){
+    var activePage = document.getElementById('page-'+page);
+    if (activePage) {
+      activePage.scrollTop = 0;
+      activePage.style.webkitOverflowScrolling = 'touch';
+    }
+  }, 0);
 }
+
+window.addEventListener('popstate', function(ev) {
+  var page = ev.state && ev.state.otsPage;
+  if (!page) page = 'home';
+  if (!document.getElementById('page-' + page)) page = 'home';
+  window._otsHandlePageHistory = false;
+  showPage(page);
+  window._otsHandlePageHistory = true;
+});
 
 // =======================================
 // CALENDAR
