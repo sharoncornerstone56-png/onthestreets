@@ -209,6 +209,15 @@ body::after{content:'';position:fixed;inset:0;background-image:url("data:image/s
 .ml-reg-status{font-size:.78rem;line-height:1.45;min-height:1rem;margin-top:.65rem;color:rgba(244,240,255,.62);}
 .ml-reg-status.ok{color:#4ECB71;}
 .ml-reg-status.err{color:#ff6b6b;}
+.ml-helpdesk-list{display:flex;flex-direction:column;gap:.45rem;margin-top:.8rem;}
+.ml-helpdesk-item{
+  display:flex;align-items:center;justify-content:space-between;gap:.65rem;
+  padding:.55rem .7rem;border:1px solid rgba(255,255,255,.1);
+  background:rgba(255,255,255,.04);border-radius:6px;
+  color:rgba(244,240,255,.82);font-size:.78rem;text-decoration:none;
+}
+.ml-helpdesk-item strong{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:#70BAF4;}
+.ml-helpdesk-item span{color:var(--orange);font-weight:800;white-space:nowrap;}
 .member-logout-btn{
   background:transparent;border:1px solid rgba(112,186,244,.35);color:#70BAF4;
   font-family:'DM Sans',sans-serif;font-size:.72rem;font-weight:600;
@@ -3189,10 +3198,17 @@ textarea{
         <button class="btn-cta-book" onclick="showPage('venues')">
           Book a Slot <span class="cta-arrow">&#8594;</span>
         </button>
+        <button class="lb-cta" onclick="openRegisterEmailPage()" style="margin-top:.8rem;">
+          Register Email
+        </button>
         <button class="lb-cta" onclick="showPage('leaderboard')" style="margin-top:.8rem;">
            &#127942; Performer Rankings
         </button>
         <div class="cta-note">&#8987; Slots are subject to admin approval</div>
+        <div style="width:100%;max-width:280px;">
+          <div style="font-size:.7rem;color:var(--muted);text-align:right;margin:.45rem 0 .35rem;">Need help?</div>
+          <div class="ml-helpdesk-list" data-helpdesk-list></div>
+        </div>
       </div>
     </div>
   </div>
@@ -3824,6 +3840,18 @@ textarea{
         </div>
         <div id="settings-phone-status" style="font-size:.75rem;color:var(--muted);margin-top:.6rem;"></div>
       </div>
+
+      <div class="panel" style="max-width:640px;margin-top:1.2rem;">
+        <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.4rem;">Helpdesk Numbers</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-bottom:1rem;line-height:1.6;">
+          Add one number per line. These appear on the email registration help screen and are used as contact options when members have login or registration issues.
+        </div>
+        <textarea class="form-input" id="settings-helpdesk-numbers" rows="5" placeholder="+91 98765 43210&#10;+91 91234 56789" style="width:100%;resize:vertical;"></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:.75rem;">
+          <button class="btn-add-venue" onclick="saveHelpdeskNumbers()" style="white-space:nowrap;"> Save Helpdesk</button>
+        </div>
+        <div id="settings-helpdesk-status" style="font-size:.75rem;color:var(--muted);margin-top:.6rem;"></div>
+      </div>
     </div>
 
     <!-- SUPER ADMIN TAB -->
@@ -4031,6 +4059,7 @@ let allBookings = [];
 let myBookings  = [];
 let galleryPhotos = [];
 let adminPhone  = '';   // loaded from settings table at startup
+let helpdeskNumbers = []; // loaded from settings table; list of public helpdesk phones
 let members     = []; // {id, name, phone, addedAt, active}
 let selectedVenueId  = null;
 let selectedDate     = null;
@@ -4498,7 +4527,7 @@ async function refreshLiveCoreDataNow(opts) {
     });
   }
 
-  (sRows || []).forEach(function(row){ if(row.key==='admin_phone') adminPhone=row.value||''; });
+  applySettingsRows(sRows || []);
   let statusChanged = false;
   myBookings = loadMyBookings().map(function(mb) {
     const live = allBookings.find(function(ab){ return ab.id === mb.id; });
@@ -5988,10 +6017,11 @@ function dismissNotif(id) {
 // ========================================
 // DB MIGRATIONS (run once on startup)
 // ========================================
-const MIGRATION_VERSION = '2026-04-28-1';
+const MIGRATION_VERSION = '2026-04-29-2';
 async function runMigrations(force) {
   try { if (!force && localStorage.getItem('ots_migration_version') === MIGRATION_VERSION) return; } catch(e) {}
   const run = async (sql) => { try { await neonSQL(sql); } catch(e) { console.warn('Migration skipped:', e && (e.message||e)); } };
+  await run("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT DEFAULT '')");
   await run("ALTER TABLE venues   ADD COLUMN IF NOT EXISTS image_url     TEXT    DEFAULT ''");
   await run("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS email         TEXT    DEFAULT ''");
   await run("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS proof_url     TEXT    DEFAULT ''");
@@ -6258,8 +6288,48 @@ function _daysUntil(dateStr) {
 function _canWithdrawOnline(dateStr) {
   return _daysUntil(dateStr) > 2;
 }
+function _cleanPhoneForTel(phone) {
+  return String(phone || '').replace(/[^\d+]/g, '');
+}
+function parseHelpdeskNumbers(raw) {
+  return String(raw || '')
+    .split(/[\n,;]+/)
+    .map(function(x){ return x.trim(); })
+    .filter(Boolean);
+}
+function formatHelpdeskNumbers(numbers) {
+  return (numbers || []).filter(Boolean).join('\n');
+}
+function applySettingsRows(rows) {
+  (rows || []).forEach(function(row) {
+    if (row.key === 'admin_phone') adminPhone = row.value || '';
+    if (row.key === 'helpdesk_numbers') helpdeskNumbers = parseHelpdeskNumbers(row.value || '');
+  });
+  if (!helpdeskNumbers.length && adminPhone) helpdeskNumbers = [adminPhone];
+  renderHelpdeskContacts();
+}
+function getHelpdeskNumbers() {
+  var nums = (helpdeskNumbers || []).slice();
+  if (adminPhone && nums.indexOf(adminPhone) === -1) nums.unshift(adminPhone);
+  return nums.filter(Boolean);
+}
+function renderHelpdeskContacts() {
+  var nums = getHelpdeskNumbers();
+  var boxes = document.querySelectorAll('[data-helpdesk-list]');
+  boxes.forEach(function(box) {
+    if (!nums.length) {
+      box.innerHTML = '<div class="ml-reg-hint" style="margin:.4rem 0 0;">Helpdesk number is not configured yet. Please contact admin directly.</div>';
+      return;
+    }
+    box.innerHTML = nums.map(function(num, i) {
+      var tel = _cleanPhoneForTel(num);
+      var label = i === 0 ? 'Primary Helpdesk' : ('Helpdesk ' + (i + 1));
+      return '<a class="ml-helpdesk-item" href="tel:' + tel + '"><strong>' + label + '</strong><span>' + otsEscapeHtml(num) + '</span></a>';
+    }).join('');
+  });
+}
 function _adminContactHtml(label, title) {
-  var safePhone = String(adminPhone || '').replace(/[^\d+]/g, '');
+  var safePhone = _cleanPhoneForTel(getHelpdeskNumbers()[0] || adminPhone || '');
   if (safePhone) {
     return `<a class="bi-contact-admin" href="tel:${safePhone}" title="${title || 'Contact admin'}">${label || 'Contact Admin'}</a>`;
   }
@@ -6491,7 +6561,10 @@ function switchAdminTab(tab) {
   if (tab==='photos')      { renderPhotoManager(); loadPerfPhotos(); }
   if (tab==='members')     loadMembers();
   if (tab==='points')      loadWithdrawList();
-  if (tab==='settings')    { var ph=document.getElementById('settings-admin-phone'); if(ph) ph.value=adminPhone||''; }
+  if (tab==='settings')    {
+    var ph=document.getElementById('settings-admin-phone'); if(ph) ph.value=adminPhone||'';
+    var hd=document.getElementById('settings-helpdesk-numbers'); if(hd) hd.value=formatHelpdeskNumbers(helpdeskNumbers);
+  }
   if (tab==='superadmin')  loadSuperAdminData();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -6767,17 +6840,44 @@ async function saveAdminPhone() {
   var phone = (inp.value || '').trim();
   status.textContent = ' Saving...';
   try {
+    await neonSQL("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT DEFAULT '')");
     await neonSQL(
       "INSERT INTO settings (key,value) VALUES ('admin_phone',$1) ON CONFLICT (key) DO UPDATE SET value=$1",
       [phone]
     );
     adminPhone = phone;
+    if (!helpdeskNumbers.length && adminPhone) helpdeskNumbers = [adminPhone];
+    renderHelpdeskContacts();
     status.textContent = phone ? ' Saved - members will now see a call button.' : ' Cleared.';
     logAdminAction('update_setting', 'Admin phone  ' + (phone || '(cleared)')).catch(function(){});
     showToast('','Saved','Admin contact number updated.');
   } catch(e) {
     status.textContent = ' Could not save - try again.';
     console.error('saveAdminPhone:', e);
+  }
+}
+async function saveHelpdeskNumbers() {
+  var inp = document.getElementById('settings-helpdesk-numbers');
+  var status = document.getElementById('settings-helpdesk-status');
+  if (!inp) return;
+  var nums = parseHelpdeskNumbers(inp.value || '');
+  var value = formatHelpdeskNumbers(nums);
+  if (status) status.textContent = ' Saving...';
+  try {
+    await neonSQL("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT DEFAULT '')");
+    await neonSQL(
+      "INSERT INTO settings (key,value) VALUES ('helpdesk_numbers',$1) ON CONFLICT (key) DO UPDATE SET value=$1",
+      [value]
+    );
+    helpdeskNumbers = nums;
+    if (!helpdeskNumbers.length && adminPhone) helpdeskNumbers = [adminPhone];
+    renderHelpdeskContacts();
+    if (status) status.textContent = nums.length ? ' Saved ' + nums.length + ' helpdesk number(s).' : ' Cleared. Admin phone will be used if available.';
+    logAdminAction('update_setting', 'Helpdesk numbers  ' + (value || '(cleared)')).catch(function(){});
+    showToast('','Saved','Helpdesk numbers updated.');
+  } catch(e) {
+    if (status) status.textContent = ' Could not save - try again.';
+    console.error('saveHelpdeskNumbers:', e);
   }
 }
 function updateAdminStats() {
@@ -8743,6 +8843,7 @@ function memberLogout() {
   document.getElementById('memberLoginPage').classList.remove('hidden');
   document.getElementById('mlStep1').style.display = 'block';
   document.getElementById('mlStep2').style.display = 'none';
+  var _msr=document.getElementById('mlStepRegister'); if(_msr) _msr.style.display='none';
   document.getElementById('mlPhone').value = '';
   var _mt2=document.getElementById('mlTimerTextStep2'); if(_mt2) _mt2.textContent='';
   mlResetRegisterEmail();
@@ -8759,6 +8860,7 @@ function showMemberLogin(venueId) {
   if (mlp) mlp.classList.remove('hidden');
   var s1 = document.getElementById('mlStep1'); if (s1) s1.style.display = 'block';
   var s2 = document.getElementById('mlStep2'); if (s2) s2.style.display = 'none';
+  var sr = document.getElementById('mlStepRegister'); if (sr) sr.style.display = 'none';
   var err = document.getElementById('mlErr'); if (err) err.textContent = '';
   var ph = document.getElementById('mlPhone'); if (ph) setTimeout(function(){ ph.focus(); }, 60);
   var t2 = document.getElementById('mlTimerTextStep2'); if (t2) t2.textContent = '';
@@ -8797,23 +8899,7 @@ function mlSetRegisterStatus(message, type) {
   status.className = 'ml-reg-status' + (type ? (' ' + type) : '');
 }
 
-function mlToggleRegisterEmail(forceOpen) {
-  var panel = document.getElementById('mlRegPanel');
-  if (!panel) return;
-  var open = typeof forceOpen === 'boolean' ? forceOpen : panel.hasAttribute('hidden');
-  if (open) {
-    panel.removeAttribute('hidden');
-    mlSetRegisterStatus('', '');
-    var phone = document.getElementById('mlRegPhone');
-    if (phone) setTimeout(function(){ phone.focus(); }, 60);
-  } else {
-    panel.setAttribute('hidden', '');
-  }
-}
-
 function mlResetRegisterEmail() {
-  var panel = document.getElementById('mlRegPanel');
-  if (panel) panel.setAttribute('hidden', '');
   ['mlRegPhone','mlRegEmail'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.value = '';
@@ -8821,6 +8907,34 @@ function mlResetRegisterEmail() {
   mlSetRegisterStatus('', '');
   var btn = document.getElementById('mlRegBtn');
   if (btn) { btn.disabled = false; btn.textContent = 'Save Email'; }
+}
+
+function mlOpenRegisterEmail() {
+  var mlp = document.getElementById('memberLoginPage');
+  if (mlp) mlp.classList.remove('hidden');
+  try { document.documentElement.classList.add('force-member-login'); } catch(e) {}
+  var s1 = document.getElementById('mlStep1'); if (s1) s1.style.display = 'none';
+  var s2 = document.getElementById('mlStep2'); if (s2) s2.style.display = 'none';
+  var sr = document.getElementById('mlStepRegister'); if (sr) sr.style.display = 'block';
+  var err = document.getElementById('mlErr'); if (err) err.textContent = '';
+  mlSetRegisterStatus('', '');
+  renderHelpdeskContacts();
+  var phone = document.getElementById('mlRegPhone');
+  if (phone) setTimeout(function(){ phone.focus(); }, 80);
+}
+
+function mlBackToEmailLogin() {
+  var sr = document.getElementById('mlStepRegister'); if (sr) sr.style.display = 'none';
+  var s2 = document.getElementById('mlStep2'); if (s2) s2.style.display = 'none';
+  var s1 = document.getElementById('mlStep1'); if (s1) s1.style.display = 'block';
+  var err = document.getElementById('mlErr'); if (err) err.textContent = '';
+  mlSetRegisterStatus('', '');
+  var email = document.getElementById('mlPhone');
+  if (email) setTimeout(function(){ email.focus(); }, 60);
+}
+
+function openRegisterEmailPage() {
+  mlOpenRegisterEmail();
 }
 
 async function mlRegisterEmail() {
@@ -8856,14 +8970,14 @@ async function mlRegisterEmail() {
       [phoneTen]
     );
     if (!memberRows || !memberRows.length) {
-      mlSetRegisterStatus('This phone number is not in admin member access. Ask admin to add it first.', 'err');
+      mlSetRegisterStatus('This phone number is not in admin member access. Contact admin or helpdesk to add it first.', 'err');
       return;
     }
 
     var member = memberRows[0];
     var existingEmail = String(member.email || '').trim().toLowerCase();
     if (existingEmail && existingEmail !== email) {
-      mlSetRegisterStatus('This phone already has an email saved. Contact admin to change it.', 'err');
+      mlSetRegisterStatus('This phone already has an email saved. Contact admin or helpdesk to change it.', 'err');
       return;
     }
 
@@ -8872,7 +8986,7 @@ async function mlRegisterEmail() {
       [email]
     );
     if (emailRows && emailRows.length && _normPhone(emailRows[0].phone) !== phoneTen) {
-      mlSetRegisterStatus('This email is already used by another member. Use another email or contact admin.', 'err');
+      mlSetRegisterStatus('This email is already used by another member. Use another email or contact admin/helpdesk.', 'err');
       return;
     }
 
@@ -8910,8 +9024,9 @@ async function mlRegisterEmail() {
     }
 
     if (loginEmailEl) loginEmailEl.value = email;
-    mlSetRegisterStatus('Email saved. Now tap Send OTP to login.', 'ok');
+    mlSetRegisterStatus('Email saved. Opening login so you can send OTP.', 'ok');
     if (typeof showToast === 'function') showToast('', 'Email Saved', 'You can now receive OTP on this email.');
+    setTimeout(function(){ mlBackToEmailLogin(); }, 750);
   } catch(e) {
     console.error('Member email registration failed:', e);
     mlSetRegisterStatus('Could not save email right now. Check internet and try again.', 'err');
@@ -8984,6 +9099,7 @@ async function mlSend(isResend) {
   }).then(function(){
     document.getElementById('mlStep1').style.display = 'none';
     document.getElementById('mlStep2').style.display = 'block';
+    var regStep = document.getElementById('mlStepRegister'); if (regStep) regStep.style.display = 'none';
     var sent = document.getElementById('mlSentTo');
     if (sent) sent.textContent = email;
     var otpInput = document.getElementById('mlOtpInput');
@@ -9111,6 +9227,7 @@ function mlVerify() {
 function mlBack() {
   clearInterval(_mlOtpTimer);
   document.getElementById('mlStep2').style.display = 'none';
+  var regStep = document.getElementById('mlStepRegister'); if (regStep) regStep.style.display = 'none';
   document.getElementById('mlStep1').style.display = 'block';
   document.getElementById('mlErr').textContent = '';
   var t2 = document.getElementById('mlTimerTextStep2'); if (t2) t2.textContent = '';
@@ -9512,15 +9629,8 @@ function togglePw() {
         autocomplete="email" inputmode="email">
       <button class="ml-btn" id="mlSendBtn" onclick="mlSend()">Send OTP </button>
       <div id="mlTimerText"></div>
-      <button type="button" class="ml-link-btn" onclick="mlToggleRegisterEmail()">No email registered? Register with phone</button>
-      <div class="ml-reg-panel" id="mlRegPanel" hidden>
-        <div class="ml-reg-title">Register Email</div>
-        <div class="ml-reg-hint">Use the mobile number admin already added for you. Your email will be saved to that member record.</div>
-        <input id="mlRegPhone" type="tel" placeholder="Member mobile number" class="ml-input" autocomplete="tel" inputmode="tel">
-        <input id="mlRegEmail" type="email" placeholder="Email to receive OTP" class="ml-input" autocomplete="email" inputmode="email">
-        <button class="ml-btn" id="mlRegBtn" type="button" onclick="mlRegisterEmail()">Save Email</button>
-        <div class="ml-reg-status" id="mlRegStatus"></div>
-      </div>
+      <button type="button" class="ml-link-btn" onclick="mlOpenRegisterEmail()">Register Email with Mobile Number</button>
+      <div class="ml-reg-hint" style="text-align:center;margin:.35rem 0 0;">OTP or email issue? Contact admin/helpdesk.</div>
     </div>
 
     <!-- Step 2: email otp -->
@@ -9534,6 +9644,22 @@ function togglePw() {
       <div style="text-align:center;margin-top:.8rem;display:flex;justify-content:center;gap:1rem;flex-wrap:wrap;">
         <button id="mlResendBtn" onclick="mlSend(true)" disabled>Resend OTP</button>
         <button onclick="mlBack()" style="background:none;border:none;color:rgba(244,240,255,.4);font-size:.8rem;cursor:pointer;text-decoration:underline;">Back Change email</button>
+      </div>
+    </div>
+
+    <!-- Step 3: register email -->
+    <div id="mlStepRegister" style="display:none;">
+      <div style="font-family:'Playfair Display',serif;font-size:1.4rem;font-weight:900;margin-bottom:.5rem;">Register Email</div>
+      <div class="ml-reg-hint">Use the mobile number admin already added for you. Your email will be saved to that member record, then you can receive OTP.</div>
+      <input id="mlRegPhone" type="tel" placeholder="Member mobile number" class="ml-input" autocomplete="tel" inputmode="tel">
+      <input id="mlRegEmail" type="email" placeholder="Email to receive OTP" class="ml-input" autocomplete="email" inputmode="email">
+      <button class="ml-btn" id="mlRegBtn" type="button" onclick="mlRegisterEmail()">Save Email</button>
+      <button type="button" class="ml-link-btn" onclick="mlBackToEmailLogin()">Back to Login</button>
+      <div class="ml-reg-status" id="mlRegStatus"></div>
+      <div class="ml-reg-panel" style="margin-top:1rem;">
+        <div class="ml-reg-title">Need Help?</div>
+        <div class="ml-reg-hint">If your phone is not found, email is already assigned, or OTP is not coming, contact admin or helpdesk.</div>
+        <div class="ml-helpdesk-list" data-helpdesk-list></div>
       </div>
     </div>
 
