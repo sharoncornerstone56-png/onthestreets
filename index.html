@@ -192,6 +192,23 @@ body::after{content:'';position:fixed;inset:0;background-image:url("data:image/s
 }
 .ml-btn:hover{opacity:.88;}
 .ml-err{color:#ff6b6b;font-size:.82rem;margin-top:.6rem;min-height:1rem;}
+.ml-link-btn{
+  width:100%;background:none;border:none;color:#70BAF4;
+  font-family:'DM Sans',sans-serif;font-size:.82rem;font-weight:700;
+  cursor:pointer;text-decoration:underline;margin:.7rem 0 .2rem;padding:.35rem;
+}
+.ml-reg-panel{
+  border:1px solid rgba(112,186,244,.22);
+  background:rgba(112,186,244,.07);
+  border-radius:8px;
+  padding:1rem;
+  margin-top:.65rem;
+}
+.ml-reg-title{font-size:.72rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#70BAF4;margin-bottom:.75rem;}
+.ml-reg-hint{font-size:.76rem;color:rgba(244,240,255,.58);line-height:1.45;margin:-.2rem 0 .8rem;}
+.ml-reg-status{font-size:.78rem;line-height:1.45;min-height:1rem;margin-top:.65rem;color:rgba(244,240,255,.62);}
+.ml-reg-status.ok{color:#4ECB71;}
+.ml-reg-status.err{color:#ff6b6b;}
 .member-logout-btn{
   background:transparent;border:1px solid rgba(112,186,244,.35);color:#70BAF4;
   font-family:'DM Sans',sans-serif;font-size:.72rem;font-weight:600;
@@ -5985,6 +6002,7 @@ async function runMigrations(force) {
   await run("CREATE TABLE IF NOT EXISTS admin_logs (id SERIAL PRIMARY KEY, admin_username TEXT NOT NULL, action TEXT NOT NULL, details TEXT DEFAULT '', created_at TIMESTAMP DEFAULT NOW())");
   // Seed the original superadmin so existing installs keep working
   await run("INSERT INTO admins (username, password, role) VALUES ('admin','ots2024','superadmin') ON CONFLICT (username) DO NOTHING");
+  await run("ALTER TABLE members ADD COLUMN IF NOT EXISTS email TEXT DEFAULT ''");
   await run("ALTER TABLE members ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT ''");
   await run("ALTER TABLE members ADD COLUMN IF NOT EXISTS bio TEXT DEFAULT ''");
   await run("ALTER TABLE members ADD COLUMN IF NOT EXISTS genre TEXT DEFAULT ''");
@@ -8727,6 +8745,7 @@ function memberLogout() {
   document.getElementById('mlStep2').style.display = 'none';
   document.getElementById('mlPhone').value = '';
   var _mt2=document.getElementById('mlTimerTextStep2'); if(_mt2) _mt2.textContent='';
+  mlResetRegisterEmail();
   clearInterval(_mlOtpTimer);
   document.getElementById('mlErr').textContent = '';
   showToast('','Signed Out','Please sign in again.');
@@ -8743,6 +8762,7 @@ function showMemberLogin(venueId) {
   var err = document.getElementById('mlErr'); if (err) err.textContent = '';
   var ph = document.getElementById('mlPhone'); if (ph) setTimeout(function(){ ph.focus(); }, 60);
   var t2 = document.getElementById('mlTimerTextStep2'); if (t2) t2.textContent = '';
+  mlResetRegisterEmail();
   clearInterval(_mlOtpTimer);
 }
 
@@ -8764,6 +8784,140 @@ function formatEmailJSError(error) {
     try { parts.push(JSON.stringify(error)); } catch(e) {}
   }
   return parts.join(': ') || 'Unknown EmailJS error.';
+}
+
+function mlEmailLooksValid(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+function mlSetRegisterStatus(message, type) {
+  var status = document.getElementById('mlRegStatus');
+  if (!status) return;
+  status.textContent = message || '';
+  status.className = 'ml-reg-status' + (type ? (' ' + type) : '');
+}
+
+function mlToggleRegisterEmail(forceOpen) {
+  var panel = document.getElementById('mlRegPanel');
+  if (!panel) return;
+  var open = typeof forceOpen === 'boolean' ? forceOpen : panel.hasAttribute('hidden');
+  if (open) {
+    panel.removeAttribute('hidden');
+    mlSetRegisterStatus('', '');
+    var phone = document.getElementById('mlRegPhone');
+    if (phone) setTimeout(function(){ phone.focus(); }, 60);
+  } else {
+    panel.setAttribute('hidden', '');
+  }
+}
+
+function mlResetRegisterEmail() {
+  var panel = document.getElementById('mlRegPanel');
+  if (panel) panel.setAttribute('hidden', '');
+  ['mlRegPhone','mlRegEmail'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  mlSetRegisterStatus('', '');
+  var btn = document.getElementById('mlRegBtn');
+  if (btn) { btn.disabled = false; btn.textContent = 'Save Email'; }
+}
+
+async function mlRegisterEmail() {
+  var phoneEl = document.getElementById('mlRegPhone');
+  var emailEl = document.getElementById('mlRegEmail');
+  var btn = document.getElementById('mlRegBtn');
+  var loginEmailEl = document.getElementById('mlPhone');
+  var rawPhone = phoneEl && phoneEl.value ? phoneEl.value.trim() : '';
+  var phoneTen = _normPhone(rawPhone);
+  var email = emailEl && emailEl.value ? emailEl.value.trim().toLowerCase() : '';
+
+  mlSetRegisterStatus('', '');
+  if (!phoneTen || phoneTen.length < 10) {
+    mlSetRegisterStatus('Enter the member mobile number admin added.', 'err');
+    if (phoneEl) phoneEl.focus();
+    return;
+  }
+  if (!mlEmailLooksValid(email)) {
+    mlSetRegisterStatus('Enter a valid email address.', 'err');
+    if (emailEl) emailEl.focus();
+    return;
+  }
+  if (typeof neonSQL !== 'function') {
+    mlSetRegisterStatus('Live database is not ready. Check internet and try again.', 'err');
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    try { await ensureMemberProfileColumns(); } catch(_) {}
+    var memberRows = await neonSQL(
+      "SELECT * FROM members WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone,''),'[^0-9]','','g'),10) = $1 AND active IS NOT FALSE LIMIT 1",
+      [phoneTen]
+    );
+    if (!memberRows || !memberRows.length) {
+      mlSetRegisterStatus('This phone number is not in admin member access. Ask admin to add it first.', 'err');
+      return;
+    }
+
+    var member = memberRows[0];
+    var existingEmail = String(member.email || '').trim().toLowerCase();
+    if (existingEmail && existingEmail !== email) {
+      mlSetRegisterStatus('This phone already has an email saved. Contact admin to change it.', 'err');
+      return;
+    }
+
+    var emailRows = await neonSQL(
+      "SELECT id, phone FROM members WHERE LOWER(COALESCE(email,'')) = $1 AND active IS NOT FALSE LIMIT 1",
+      [email]
+    );
+    if (emailRows && emailRows.length && _normPhone(emailRows[0].phone) !== phoneTen) {
+      mlSetRegisterStatus('This email is already used by another member. Use another email or contact admin.', 'err');
+      return;
+    }
+
+    if (!existingEmail) {
+      if (member.id != null) {
+        await neonSQL('UPDATE members SET email=$1 WHERE id=$2', [email, member.id]);
+      } else {
+        await neonSQL(
+          "UPDATE members SET email=$1 WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone,''),'[^0-9]','','g'),10) = $2 AND active IS NOT FALSE",
+          [email, phoneTen]
+        );
+      }
+    }
+
+    var freshRows = await neonSQL(
+      'SELECT * FROM members WHERE LOWER(email) = $1 AND active IS NOT FALSE LIMIT 1',
+      [email]
+    );
+    var savedMember = freshRows && freshRows.length ? freshRows[0] : Object.assign({}, member, { email: email });
+    if (typeof members !== 'undefined') {
+      var local = members.find(function(m){ return _normPhone(m.phone) === phoneTen; });
+      if (local) {
+        local.email = email;
+        local.active = savedMember.active !== false;
+      } else {
+        members.push({
+          id: savedMember.id,
+          name: savedMember.name || '',
+          email: email,
+          phone: savedMember.phone || rawPhone,
+          active: savedMember.active !== false
+        });
+      }
+      try { localStorage.setItem('ots_members_cache', JSON.stringify(members)); } catch(_) {}
+    }
+
+    if (loginEmailEl) loginEmailEl.value = email;
+    mlSetRegisterStatus('Email saved. Now tap Send OTP to login.', 'ok');
+    if (typeof showToast === 'function') showToast('', 'Email Saved', 'You can now receive OTP on this email.');
+  } catch(e) {
+    console.error('Member email registration failed:', e);
+    mlSetRegisterStatus('Could not save email right now. Check internet and try again.', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Email'; }
+  }
 }
 
 async function mlSend(isResend) {
@@ -8795,7 +8949,7 @@ async function mlSend(isResend) {
   if (!match) match = await mlCheckMemberByEmail(email);
 
   if (!match) {
-    if (err) err.textContent = ' This email is not registered. Contact admin to get access.';
+    if (err) err.textContent = 'This email is not registered. If admin added your phone, use Register with phone below.';
     if (btn) { btn.textContent = 'Send OTP '; btn.disabled = false; }
     if (resendBtn) resendBtn.disabled = false;
     return;
@@ -9028,6 +9182,10 @@ async function mlCheckMember(phone) {
 document.addEventListener('DOMContentLoaded', function() {
   var ph = document.getElementById('mlPhone');
   if (ph) ph.addEventListener('keydown', function(e) { if (e.key === 'Enter') mlSend(); });
+  var rp = document.getElementById('mlRegPhone');
+  if (rp) rp.addEventListener('keydown', function(e) { if (e.key === 'Enter') mlRegisterEmail(); });
+  var re = document.getElementById('mlRegEmail');
+  if (re) re.addEventListener('keydown', function(e) { if (e.key === 'Enter') mlRegisterEmail(); });
   var oi = document.getElementById('mlOtpInput');
   if (oi) oi.addEventListener('keydown', function(e) { if (e.key === 'Enter') mlVerify(); });
   fillBookingFormFromSession();
@@ -9354,6 +9512,15 @@ function togglePw() {
         autocomplete="email" inputmode="email">
       <button class="ml-btn" id="mlSendBtn" onclick="mlSend()">Send OTP </button>
       <div id="mlTimerText"></div>
+      <button type="button" class="ml-link-btn" onclick="mlToggleRegisterEmail()">No email registered? Register with phone</button>
+      <div class="ml-reg-panel" id="mlRegPanel" hidden>
+        <div class="ml-reg-title">Register Email</div>
+        <div class="ml-reg-hint">Use the mobile number admin already added for you. Your email will be saved to that member record.</div>
+        <input id="mlRegPhone" type="tel" placeholder="Member mobile number" class="ml-input" autocomplete="tel" inputmode="tel">
+        <input id="mlRegEmail" type="email" placeholder="Email to receive OTP" class="ml-input" autocomplete="email" inputmode="email">
+        <button class="ml-btn" id="mlRegBtn" type="button" onclick="mlRegisterEmail()">Save Email</button>
+        <div class="ml-reg-status" id="mlRegStatus"></div>
+      </div>
     </div>
 
     <!-- Step 2: email otp -->
